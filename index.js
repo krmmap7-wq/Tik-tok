@@ -12,10 +12,8 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages]
 });
 
-// Map lưu trữ các tiến trình đang chạy
 const activeSessions = new Map();
 
-// Đăng ký lệnh Slash
 const commands = [
     new SlashCommandBuilder()
         .setName('live')
@@ -26,11 +24,7 @@ const commands = [
 ].map(cmd => cmd.toJSON());
 
 client.once('ready', async () => {
-    console.log(`=================================`);
-    console.log(`🤖 BOT SEEDING PRO DA ONLINE!`);
-    console.log(`👤 Name: ${client.user.tag}`);
-    console.log(`=================================`);
-
+    console.log(`🤖 BOT ONLINE: ${client.user.tag}`);
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try {
         await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
@@ -41,7 +35,6 @@ client.once('ready', async () => {
 });
 
 client.on('interactionCreate', async interaction => {
-    // 1. Xử lý Lệnh Slash
     if (interaction.isChatInputCommand()) {
         if (interaction.commandName === 'live') {
             const modal = new ModalBuilder()
@@ -50,7 +43,7 @@ client.on('interactionCreate', async interaction => {
 
             const cookieInput = new TextInputBuilder()
                 .setCustomId('cookie_input')
-                .setLabel('🍪 CHUỖI COOKIE TIKTOK (COPY TỪ STAY)')
+                .setLabel('🍪 CHUỖI COOKIE TIKTOK')
                 .setStyle(TextInputStyle.Paragraph)
                 .setPlaceholder('Dán toàn bộ Cookie tại đây...')
                 .setRequired(true);
@@ -64,7 +57,7 @@ client.on('interactionCreate', async interaction => {
 
             const messageInput = new TextInputBuilder()
                 .setCustomId('message_input')
-                .setLabel('💬 NỘI DUNG NHÁT TIN SPAM')
+                .setLabel('💬 NỘI DUNG TIN NHẮN SPAM')
                 .setStyle(TextInputStyle.Short)
                 .setPlaceholder('Nhập nội dung muốn gửi...')
                 .setRequired(true);
@@ -109,8 +102,6 @@ client.on('interactionCreate', async interaction => {
             }
         }
     } 
-    
-    // 2. Xử lý Nộp Bảng Modal
     else if (interaction.isModalSubmit()) {
         if (interaction.customId === 'live_modal') {
             const userId = interaction.user.id;
@@ -130,7 +121,6 @@ client.on('interactionCreate', async interaction => {
             const messageText = interaction.fields.getTextInputValue('message_input');
             const delaySec = Math.max(2, parseInt(interaction.fields.getTextInputValue('delay_input')) || 5);
 
-            // Báo khởi động ngầm
             const initEmbed = new EmbedBuilder()
                 .setColor(0x00BFFF)
                 .setTitle('⚙️ KHỞI ĐỘNG HỆ THỐNG STEALTH PRO')
@@ -158,7 +148,6 @@ client.on('interactionCreate', async interaction => {
                 const page = await browser.newPage();
                 await page.setViewport({ width: 1440, height: 900 });
 
-                // Lọc Cookie chuẩn domain .tiktok.com
                 const cookies = cookieString.split(';').map(pair => {
                     const idx = pair.indexOf('=');
                     if (idx === -1) return null;
@@ -181,22 +170,19 @@ client.on('interactionCreate', async interaction => {
                     const errCookieEmbed = new EmbedBuilder()
                         .setColor(0xFF0055)
                         .setTitle('❌ ĐỊNH DẠNG COOKIE SAI')
-                        .setDescription('Mã Cookie bạn dán không hợp lệ. Vui lòng copy lại chính xác từ app Stay.')
+                        .setDescription('Mã Cookie bạn dán không hợp lệ. Vui lòng copy lại chính xác từ Stay.')
                         .setTimestamp();
 
                     return interaction.user.send({ embeds: [errCookieEmbed] }).catch(() => {});
                 }
 
                 await page.setCookie(...cookies);
-
-                // Giả lập Mobile Safari User-Agent ăn khớp với Cookie iPhone
                 await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1');
 
                 console.log(`[PRO SETUP] Mở link: ${liveUrl}`);
                 await page.goto(liveUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
                 await new Promise(r => setTimeout(r, 5000));
 
-                // Bắt khung chat
                 const chatSelectors = [
                     'div[contenteditable="true"]',
                     'textarea[data-e2e="chat-input"]',
@@ -228,11 +214,9 @@ client.on('interactionCreate', async interaction => {
                     return interaction.user.send({ embeds: [errLoginEmbed] }).catch(() => {});
                 }
 
-                // GỬI BẢNG DASHBOARD THÀNH CÔNG VỀ DM
                 const dashboardEmbed = new EmbedBuilder()
                     .setColor(0x00FF66)
                     .setTitle('🚀 TIKTOK SEEDING DASHBOARD [ONLINE]')
-                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/3046/3046124.png')
                     .setDescription('```ansi\n\u001b[1;32m[STATUS] Đã kết nối thành công & đang chạy ngầm 24/24\u001b[0m\n```')
                     .addFields(
                         { name: '📌 Link Phòng Live', value: `[Bấm để mở phòng Live](${liveUrl})`, inline: false },
@@ -245,11 +229,9 @@ client.on('interactionCreate', async interaction => {
 
                 await interaction.user.send({ embeds: [dashboardEmbed] }).catch(() => {});
 
-                // Khởi tạo phiên
                 const session = { isStopped: false, messageCount: 0, startTime: Date.now() };
                 activeSessions.set(userId, session);
 
-                // Vòng lặp gõ tin nhắn
                 (async () => {
                     try {
                         while (!session.isStopped) {
@@ -259,7 +241,7 @@ client.on('interactionCreate', async interaction => {
                                 await page.keyboard.press('Enter');
                                 session.messageCount++;
                             } catch (err) {
-                                console.log('[RETRY] Đang thử gõ lại vào ô chat...');
+                                console.log('[RETRY] Thử lại ô chat...');
                             }
                             await new Promise(r => setTimeout(r, delaySec * 1000));
                         }
@@ -268,4 +250,36 @@ client.on('interactionCreate', async interaction => {
 
                         const durationMinutes = Math.max(1, Math.round((Date.now() - session.startTime) / 60000));
 
-                        // GỬI EMBED BÁO CÁ
+                        const reportEmbed = new EmbedBuilder()
+                            .setColor(0xFF0055)
+                            .setTitle('🛑 BÁO CÁO TỔNG KẾT TIẾN TRÌNH')
+                            .setDescription('```ansi\n\u001b[1;31m[STOPPED] Phiên làm việc đã ngắt & Cookie đã được xóa sạch.\u001b[0m\n```')
+                            .addFields(
+                                { name: '✉️ Tổng Số Tin Nhắn', value: `\`\`\`yaml\n${session.messageCount} Tin nhắn\n\`\`\``, inline: true },
+                                { name: '⏱️ Thời Gian Chạy', value: `\`\`\`yaml\n${durationMinutes} Phút\n\`\`\``, inline: true }
+                            )
+                            .setFooter({ text: 'Dữ liệu cá nhân đã được dọn dẹp khỏi bộ nhớ tạm.' })
+                            .setTimestamp();
+
+                        await interaction.user.send({ embeds: [reportEmbed] }).catch(() => {});
+                        activeSessions.delete(userId);
+                    }
+                })();
+
+            } catch (error) {
+                if (browser) await browser.close();
+                console.error('[ERROR CRASH]:', error);
+
+                const crashEmbed = new EmbedBuilder()
+                    .setColor(0xFF0000)
+                    .setTitle('💥 LỖI HỆ THỐNG UNHANDLED')
+                    .setDescription(`\`\`\`js\n${error.message}\n\`\`\``)
+                    .setTimestamp();
+
+                await interaction.user.send({ embeds: [crashEmbed] }).catch(() => {});
+            }
+        }
+    }
+});
+
+client.login(process.env.DISCORD_TOKEN);
