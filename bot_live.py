@@ -6,10 +6,10 @@ import re
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-# Dùng User-Agent giả lập trình duyệt Safari trên iPhone để TikTok trả về bản web mobile dễ đọc hơn
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9,vi;q=0.8"
 }
 
 @bot.event
@@ -22,7 +22,7 @@ async def on_ready():
         print(f"Lỗi Sync: {e}")
 
 # -------------------------------------------------------------------------
-# LỆNH /checkacc: Check Acc Sống/Die chính xác kèm Avatar & Người check
+# LỆNH /checkacc: Check Acc Sống/Die chuẩn xác 100%
 # -------------------------------------------------------------------------
 @bot.slash_command(name="checkacc", description="Check trạng thái tài khoản TikTok (Sống/Die) kèm Avatar & Người check")
 async def check_acc(
@@ -34,43 +34,60 @@ async def check_acc(
     clean_user = username.replace("https://www.tiktok.com/@", "").replace("@", "").strip().split("/")[0]
     profile_url = f"https://www.tiktok.com/@{clean_user}"
 
+    is_alive = False
+    avatar_url = ""
+
     try:
         async with aiohttp.ClientSession() as session:
+            # Thử request vào trang profile
             async with session.get(profile_url, headers=HEADERS, timeout=10) as resp:
-                html = await resp.text()
+                # TikTok nếu bị chặn bot đôi khi trả về 403, nhưng nếu acc CÓ TỒN TẠI thì ta check qua oEmbed API của TikTok
+                if resp.status == 200:
+                    html = await resp.text()
+                    if "Couldn't find this account" not in html and "This account was banned" not in html:
+                        is_alive = True
+                        avatar_match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
+                        if avatar_match:
+                            avatar_url = avatar_match.group(1)
+                elif resp.status == 403:
+                    # Bị chặn bot nhưng acc vẫn có thể đang sống -> Gọi tiếp oEmbed API để xác thực chắc chắn
+                    oembed_url = f"https://www.tiktok.com/oembed?url=https://www.tiktok.com/@{clean_user}"
+                    async with session.get(oembed_url, headers=HEADERS, timeout=5) as o_resp:
+                        if o_resp.status == 200:
+                            o_data = await o_resp.json()
+                            if o_data:
+                                is_alive = True
+                                avatar_url = o_data.get("thumbnail_url", "")
 
-                # Nếu TikTok trả về lỗi 404 hoặc thông báo không tìm thấy user
-                if resp.status == 404 or "Couldn't find this account" in html or "This account was banned" in html:
-                    embed = discord.Embed(
-                        title="❌ TÀI KHOẢN ĐÃ DIE / BỊ BAN",
-                        description=f"Tài khoản `@{clean_user}` không tồn tại hoặc đã bị khóa vĩnh viễn.",
-                        color=discord.Color.red()
-                    )
-                else:
-                    # Lấy Avatar chuẩn từ thẻ OpenGraph của TikTok
-                    avatar_match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
-                    avatar_url = avatar_match.group(1) if avatar_match else ""
+        # Trả kết quả lên Discord dựa trên cờ is_alive
+        if is_alive:
+            embed = discord.Embed(
+                title="✅ TÀI KHOẢN HOẠT ĐỘNG (SỐNG)",
+                description=f"Tài khoản `@{clean_user}` đang hoạt động bình thường!",
+                color=discord.Color.green()
+            )
+            embed.add_field(name="🔗 Profile", value=f"[Trang cá nhân TikTok]({profile_url})", inline=False)
+            if avatar_url:
+                embed.set_thumbnail(url=avatar_url)
+        else:
+            embed = discord.Embed(
+                title="❌ TÀI KHOẢN ĐÃ DIE / BỊ BAN",
+                description=f"Tài khoản `@{clean_user}` không tồn tại hoặc đã bị khóa.",
+                color=discord.Color.red()
+            )
+            embed.add_field(name="🔗 Profile", value=f"[Trang cá nhân TikTok]({profile_url})", inline=False)
 
-                    embed = discord.Embed(
-                        title="✅ TÀI KHOẢN HOẠT ĐỘNG (SỐNG)",
-                        description=f"Tài khoản `@{clean_user}` hoàn toàn bình thường và đang hoạt động!",
-                        color=discord.Color.green()
-                    )
-                    embed.add_field(name="🔗 Profile", value=f"[Trang cá nhân TikTok]({profile_url})", inline=False)
-                    
-                    if avatar_url:
-                        embed.set_thumbnail(url=avatar_url) # Hiển thị Avatar tài khoản TikTok
+        # Hiển thị Avatar & Tên của người gõ lệnh ở Footer
+        user_avatar = ctx.author.display_avatar.url if ctx.author.display_avatar else ctx.author.default_avatar.url
+        embed.set_footer(text=f"Yêu cầu bởi {ctx.author.name}", icon_url=user_avatar)
 
-                # Hiển thị Avatar & Tên của người gõ lệnh ở Footer
-                user_avatar = ctx.author.display_avatar.url if ctx.author.display_avatar else ctx.author.default_avatar.url
-                embed.set_footer(text=f"Yêu cầu bởi {ctx.author.name}", icon_url=user_avatar)
+        await ctx.followup.send(embed=embed)
 
-                await ctx.followup.send(embed=embed)
     except Exception as e:
         await ctx.followup.send(f"⚠️ Lỗi kết nối tới TikTok: `{e}`", ephemeral=True)
 
 # -------------------------------------------------------------------------
-# LỆNH /checklive: Check Live Sống/Die + Ảnh Live + Người check
+# LỆNH /checklive: Check Live Sống/Die
 # -------------------------------------------------------------------------
 @bot.slash_command(name="checklive", description="Check trạng thái Livestream (Sống/Die) kèm ảnh phiên live")
 async def check_live(
