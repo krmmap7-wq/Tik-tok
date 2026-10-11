@@ -2,13 +2,14 @@ import discord
 from discord.ext import commands
 import aiohttp
 import re
-import json
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
 
-headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+# Headers giả lập trình duyệt thật để không bị TikTok chặn 403 / Forbidden
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Referer": "https://www.tiktok.com/",
     "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7"
 }
 
@@ -17,50 +18,54 @@ async def on_ready():
     print(f'=== BOT CHECK TIKTOK ONLINE: {bot.user} ===')
     try:
         await bot.sync_commands()
-        print("✅ Đã sync toàn bộ lệnh mới thành công!")
+        print("✅ Đã sync lệnh thành công!")
     except Exception as e:
         print(f"Lỗi Sync: {e}")
 
 # -------------------------------------------------------------------------
-# 1. LỆNH /checkacc: Check Acc Sống/Die + Avatar + Follower + Tim + Người check
+# 1. LỆNH /checkacc: Check Acc + Avatar + Follow + Tim + Avatar người check
 # -------------------------------------------------------------------------
-@bot.slash_command(name="checkacc", description="Check trạng thái Acc TikTok (Sống/Die), số Follow, Tim & Avatar")
+@bot.slash_command(name="checkacc", description="Check trạng thái tài khoản TikTok (Sống/Die) kèm thông số chi tiết")
 async def check_acc(
     ctx: discord.ApplicationContext,
     username: discord.Option(str, description="Nhập @username hoặc link profile TikTok")
 ):
     await ctx.defer(ephemeral=False)
 
+    # Làm sạch định dạng username
     clean_user = username.replace("https://www.tiktok.com/@", "").replace("@", "").strip().split("/")[0]
-    api_url = f"https://www.tiktok.com/api/user/detail/?uniqueId={clean_user}"
     profile_url = f"https://www.tiktok.com/@{clean_user}"
+    web_url = f"https://www.tiktok.com/@{clean_user}"
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, headers=headers, timeout=10) as resp:
-                data = await resp.json()
-                
-                # Kiểm tra nếu lấy được dữ liệu User
-                user_info = data.get("userInfo", {})
-                user_data = user_info.get("user", {})
-                stats_data = user_info.get("stats", {})
+            # Cào trực tiếp trang profile web của TikTok
+            async with session.get(web_url, headers=HEADERS, timeout=10) as resp:
+                html = await resp.text()
 
-                if not user_data:
-                    # Trường hợp tài khoản Die/Ban
+                # Kiểm tra xem tài khoản có tồn tại hay bị ban không
+                if resp.status == 404 or "Couldn't find this account" in html or "This account was banned" in html:
                     embed = discord.Embed(
                         title="❌ TÀI KHOẢN ĐÃ DIE / BỊ BAN",
-                        description=f"Tài khoản `@{clean_user}` không tồn tại hoặc đã bị TikTok khóa.",
+                        description=f"Tài khoản `@{clean_user}` không tồn tại hoặc đã bị TikTok khóa vĩnh viễn.",
                         color=discord.Color.red()
                     )
-                    embed.add_field(name="🔗 Profile", value=f"[Truy cập]({profile_url})", inline=False)
                 else:
-                    # Trường hợp tài khoản SỐNG
-                    nickname = user_data.get("nickname", clean_user)
-                    avatar = user_data.get("avatarLarger", "") or user_data.get("avatarMedium", "")
+                    # Trích xuất dữ liệu từ OpenGraph tags và JSON nhúng trong HTML của TikTok
+                    avatar_match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
+                    nickname_match = re.search(r'<meta property="og:title" content="([^"]+)"', html)
                     
-                    followers = stats_data.get("followerCount", 0)
-                    likes = stats_data.get("heartCount", 0)
-                    videos = stats_data.get("videoCount", 0)
+                    # Cào số liệu Follower và Heart (Tim) từ dữ liệu json-ld hoặc kho dữ liệu trang
+                    follower_match = re.search(r'"followerCount":(\d+)', html)
+                    heart_match = re.search(r'"heartCount":(\d+)', html)
+                    video_match = re.search(r'"videoCount":(\d+)', html)
+
+                    avatar_url = avatar_match.group(1) if avatar_match else ""
+                    nickname = nickname_match.group(1).split("(@")[0].strip() if nickname_match else clean_user
+                    
+                    followers = int(follower_match.group(1)) if follower_match else 0
+                    likes = int(heart_match.group(1)) if heart_match else 0
+                    videos = int(video_match.group(1)) if video_match else 0
 
                     embed = discord.Embed(
                         title=f"✅ TÀI KHOẢN HOẠT ĐỘNG (SỐNG)",
@@ -72,24 +77,24 @@ async def check_acc(
                     embed.add_field(name="🎬 Video", value=f"`{videos:,}`", inline=True)
                     embed.add_field(name="🔗 Profile", value=f"[Trang cá nhân TikTok]({profile_url})", inline=False)
                     
-                    if avatar:
-                        embed.set_thumbnail(url=avatar) # Avatar nick TikTok
+                    if avatar_url:
+                        embed.set_thumbnail(url=avatar_url) # Ảnh đại diện tài khoản TikTok
 
-                # Hiển thị Avatar & Tên người bấm lệnh ở Footer
+                # Hiển thị Avatar & Tên của người gõ lệnh (User Check) ở Footer
                 user_avatar = ctx.author.display_avatar.url if ctx.author.display_avatar else ctx.author.default_avatar.url
                 embed.set_footer(text=f"Yêu cầu bởi {ctx.author.name}", icon_url=user_avatar)
-                
+
                 await ctx.followup.send(embed=embed)
     except Exception as e:
-        await ctx.followup.send(f"⚠️ Lỗi hệ thống khi check acc: `{e}`", ephemeral=True)
+        await ctx.followup.send(f"⚠️ Lỗi kết nối tới TikTok: `{e}`", ephemeral=True)
 
 # -------------------------------------------------------------------------
-# 2. LỆNH /checklive: Check Live Sống/Die + Mắt xem + Tim Live + Ảnh Live + Người check
+# 2. LỆNH /checklive: Check Live + Mắt xem + Tim Live + Ảnh Live + Avatar người check
 # -------------------------------------------------------------------------
-@bot.slash_command(name="checklive", description="Check trạng thái Live (Mắt xem, Tim, Ảnh phiên Live)")
+@bot.slash_command(name="checklive", description="Check trạng thái Livestream (Sống/Die), mắt xem, thả tim và ảnh live")
 async def check_live(
     ctx: discord.ApplicationContext,
-    link_live: discord.Option(str, description="Dán link live TikTok vào đây")
+    link_live: discord.Option(str, description="Dán LINK LIVERSTREAM TikTok vào đây (Không phải tên acc)")
 ):
     await ctx.defer(ephemeral=False)
 
@@ -105,10 +110,10 @@ async def check_live(
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(real_link, headers=headers, timeout=10) as resp:
+            async with session.get(real_link, headers=HEADERS, timeout=10) as resp:
                 html = await resp.text()
 
-                # Kiểm tra phòng live có tồn tại và đang phát hay không
+                # Kiểm tra phòng live còn hoạt động hay không
                 if "Live Room Ended" in html or "room_id" not in html or resp.status != 200:
                     embed = discord.Embed(
                         title="🔴 TRẠNG THÁI: LIVE ĐÃ TẮT (DIE)",
@@ -117,7 +122,7 @@ async def check_live(
                     )
                     embed.add_field(name="📌 Link kiểm tra", value=f"[Truy cập phòng Live]({real_link})", inline=False)
                 else:
-                    # Lấy thông số Mắt xem (User Count) và Ảnh bìa Live từ HTML Data
+                    # Trích xuất số mắt xem, số tim live và ảnh thumbnail phiên live
                     views_match = re.search(r'"user_count":(\d+)', html)
                     likes_match = re.search(r'"like_count":(\d+)', html)
                     img_match = re.search(r'<meta property="og:image" content="([^"]+)"', html)
@@ -127,23 +132,23 @@ async def check_live(
                     thumb_url = img_match.group(1) if img_match else ""
 
                     embed = discord.Embed(
-                        title="🟢 TRẠNG THÁI: LIVE ĐANG PHÁT (SỐNG)",
-                        description="Phòng Livestream vẫn đang hoạt động trực tiếp!",
+                        title="🟢 TRẠNG THÁI: LIVE Đang PHÁT (SỐNG)",
+                        description="Phòng Livestream đang phát trực tiếp!",
                         color=discord.Color.green()
                     )
                     embed.add_field(name="👁️ Mắt xem hiện tại", value=f"`{views:,}` người", inline=True)
-                    embed.add_field(name="💖 Lượt thả tim", value=f"`{likes:,}` tim", inline=True)
+                    embed.add_field(name="💖 Tổng tim phiên live", value=f"`{likes:,}` tim", inline=True)
                     embed.add_field(name="📌 Link Live", value=f"[Xem Livestream Ngay]({real_link})", inline=False)
                     
                     if thumb_url:
-                        embed.set_image(url=thumb_url) # Ảnh thumbnail phiên live
+                        embed.set_image(url=thumb_url) # Hiển thị ảnh đang live to đùng
 
-                # Hiển thị Avatar & Tên người bấm lệnh ở Footer
+                # Hiển thị Avatar & Tên của người gõ lệnh (User Check) ở Footer
                 user_avatar = ctx.author.display_avatar.url if ctx.author.display_avatar else ctx.author.default_avatar.url
                 embed.set_footer(text=f"Yêu cầu bởi {ctx.author.name}", icon_url=user_avatar)
 
                 await ctx.followup.send(embed=embed)
     except Exception as e:
-        await ctx.followup.send(f"⚠️ Lỗi hệ thống khi check live: `{e}`", ephemeral=True)
+        await ctx.followup.send(f"⚠️ Lỗi kết nối tới TikTok: `{e}`", ephemeral=True)
 
 bot.run("TOKEN_BOT_CỦA_BẠN")
