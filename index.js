@@ -9,10 +9,10 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages]
 });
 
-// Lưu trữ các tiến trình spam đang chạy theo userId
+// Quản lý các phiên spam đang chạy
 const activeSessions = new Map();
 
-// Đăng ký lệnh Slash
+// Đăng ký lệnh Slash /live và /stop
 const commands = [
     new SlashCommandBuilder()
         .setName('live')
@@ -23,28 +23,27 @@ const commands = [
 ].map(cmd => cmd.toJSON());
 
 client.once('ready', async () => {
-    console.log(`🤖 Bot đã sẵn sàng hoạt động 24/24: ${client.user.tag}`);
+    console.log(`🤖 Bot đã online 24/24: ${client.user.tag}`);
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try {
         await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-        console.log('✅ Đã đăng ký lệnh thành công!');
+        console.log('✅ Đã cập nhật thành công các lệnh Slash!');
     } catch (error) {
         console.error(error);
     }
 });
 
-// Xử lý sự kiện lệnh Slash và Modal
 client.on('interactionCreate', async interaction => {
     if (interaction.isChatInputCommand()) {
         if (interaction.commandName === 'live') {
-            // Hiển thị bảng Modal điền thông tin (Bảo mật, không lộ chat chung)
+            // Mở bảng Modal bảo mật điền thông tin
             const modal = new ModalBuilder()
                 .setCustomId('live_modal')
-                .setTitle('⚙️ Cấu Hình TikTok Seeding Live');
+                .setTitle('⚙️ Cấu Hình TikTok Live Seeding');
 
             const cookieInput = new TextInputBuilder()
                 .setCustomId('cookie_input')
-                .setLabel('Dán chuỗi Cookie TikTok của bạn')
+                .setLabel('Dán chuỗi Cookie TikTok')
                 .setStyle(TextInputStyle.Paragraph)
                 .setRequired(true);
 
@@ -62,7 +61,7 @@ client.on('interactionCreate', async interaction => {
 
             const delayInput = new TextInputBuilder()
                 .setCustomId('delay_input')
-                .setLabel('Thời gian chờ giữa các lần gửi (giây)')
+                .setLabel('Thời gian chờ giữa mỗi tin (giây)')
                 .setValue('5')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true);
@@ -81,7 +80,7 @@ client.on('interactionCreate', async interaction => {
             if (activeSessions.has(userId)) {
                 const session = activeSessions.get(userId);
                 session.isStopped = true;
-                await interaction.reply({ content: '🛑 Đã nhận lệnh dừng! Đang tiến hành dọn dẹp hệ thống...', ephemeral: true });
+                await interaction.reply({ content: '🛑 Đã nhận lệnh dừng! Đang ngắt tiến trình và dọn dẹp hệ thống...', ephemeral: true });
             } else {
                 await interaction.reply({ content: '⚠️ Bạn không có tiến trình seeding nào đang chạy.', ephemeral: true });
             }
@@ -92,7 +91,7 @@ client.on('interactionCreate', async interaction => {
             const userId = interaction.user.id;
             
             if (activeSessions.has(userId)) {
-                return interaction.reply({ content: '⚠️ Bạn đang có một tiến trình chạy rồi! Hãy dùng lệnh `/stop` trước.', ephemeral: true });
+                return interaction.reply({ content: '⚠️ Bạn đang chạy một phiên seeding rồi! Hãy dùng lệnh `/stop` trước.', ephemeral: true });
             }
 
             const cookieString = interaction.fields.getTextInputValue('cookie_input');
@@ -100,14 +99,18 @@ client.on('interactionCreate', async interaction => {
             const messageText = interaction.fields.getTextInputValue('message_input');
             const delaySec = parseInt(interaction.fields.getTextInputValue('delay_input')) || 5;
 
-            // Phản hồi ẩn xác nhận đã nhận lệnh
-            await interaction.reply({ content: '🔍 Hệ thống đang kiểm tra Cookie và khởi động trình duyệt...', ephemeral: true });
+            await interaction.reply({ content: '🔍 Đang kết nối trình duyệt ngầm và vào phòng Live...', ephemeral: true });
 
             let browser;
             try {
                 browser = await puppeteer.launch({
                     headless: 'new',
-                    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-blink-features=AutomationControlled']
+                    args: [
+                        '--no-sandbox', 
+                        '--disable-setuid-sandbox', 
+                        '--disable-dev-shm-usage',
+                        '--disable-blink-features=AutomationControlled'
+                    ]
                 });
 
                 const page = await browser.newPage();
@@ -120,74 +123,79 @@ client.on('interactionCreate', async interaction => {
                     const name = parts[0];
                     const value = parts.slice(1).join('=');
                     if (!name || !value) return null;
-                    return { name: name.trim(), value: value.trim(), domain: '.tiktok.com', path: '/', httpOnly: true, secure: true, sameSite: 'Lax' };
+                    return { 
+                        name: name.trim(), 
+                        value: value.trim(), 
+                        domain: '.tiktok.com', 
+                        path: '/', 
+                        httpOnly: true, 
+                        secure: true, 
+                        sameSite: 'Lax' 
+                    };
                 }).filter(Boolean);
 
                 await page.setCookie(...cookies);
 
-                // Kiểm tra đăng nhập bằng cách truy cập trang cá nhân hoặc TikTok chính
-                await page.goto('https://www.tiktok.com', { waitUntil: 'domcontentloaded', timeout: 40000 });
-                await new Promise(r => setTimeout(r, 4000));
-
-                // Check xem cookie có hợp lệ không (tìm nút đăng nhập hoặc profile)
-                const isLoggedOut = await page.$('button[data-e2e="top-login-button"]');
-                if (isLoggedOut) {
-                    await browser.close();
-                    return interaction.user.send('❌ **LỖI:** Cookie TikTok của bạn không hợp lệ hoặc đã hết hạn! Vui lòng lấy lại cookie mới.').catch(() => {});
-                }
-
-                // Truy cập phòng Live
+                // Vào thẳng phòng Live
+                console.log(`Đang mở phòng live: ${liveUrl}`);
                 await page.goto(liveUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
                 await new Promise(r => setTimeout(r, 5000));
 
+                // Kiểm tra xem có nhận được ô chat không
                 const chatSelector = 'div[contenteditable="true"], textarea[data-e2e="chat-input"]';
-                await page.waitForSelector(chatSelector, { timeout: 20000 });
+                try {
+                    await page.waitForSelector(chatSelector, { timeout: 20000 });
+                } catch (e) {
+                    await browser.close();
+                    return interaction.user.send('❌ **LỖI ĐĂNG NHẬP:** Cookie của bạn không hợp lệ/đã hết hạn, hoặc phòng Live này hiện bị khóa khung chat! Vui lòng lấy lại Cookie mới.').catch(() => {});
+                }
 
-                // Gửi thông báo thành công qua DM (Bảo mật tuyệt đối)
+                // Gửi Embed thông báo đăng nhập thành công về DM
                 const successEmbed = new EmbedBuilder()
                     .setColor(0x00FF00)
-                    .setTitle('🚀 ĐĂNG NHẬP & SEEDING THÀNH CÔNG')
-                    .setDescription('Hệ thống đã kết nối thành công vào phòng Livestream và bắt đầu gửi tin nhắn.')
+                    .setTitle('🚀 ĐĂNG NHẬP & KẾT NỐI THÀNH CÔNG')
+                    .setDescription('Bot đã đăng nhập thành công và bắt đầu gửi tin nhắn vào Livestream.')
                     .addFields(
                         { name: '🔗 Link Live', value: liveUrl },
                         { name: '💬 Nội dung', value: messageText },
-                        { name: '⏱️ Tốc độ', value: `${delaySec} giây/tin nhắn` }
+                        { name: '⏱️ Tốc độ', value: `${delaySec} giây / 1 tin nhắn` }
                     )
                     .setTimestamp();
                 
                 await interaction.user.send({ embeds: [successEmbed] }).catch(() => {});
 
-                // Thiết lập phiên chạy
+                // Khởi tạo phiên làm việc
                 const session = { isStopped: false, messageCount: 0, startTime: Date.now() };
                 activeSessions.set(userId, session);
 
-                // Vòng lặp spam chạy ngầm
+                // Vòng lặp gõ tin nhắn ngầm
                 (async () => {
                     try {
                         while (!session.isStopped) {
                             try {
                                 await page.click(chatSelector);
-                                await page.type(chatSelector, messageText, { delay: 50 });
+                                await page.type(chatSelector, messageText, { delay: 60 });
                                 await page.keyboard.press('Enter');
                                 session.messageCount++;
                             } catch (err) {
-                                console.log('Lỗi gõ khung chat, đang thử lại...', err);
+                                console.log('Đang thử lại ô chat...', err);
                             }
                             await new Promise(r => setTimeout(r, delaySec * 1000));
                         }
                     } finally {
-                        // Dọn dẹp sạch sẽ
+                        // Tự động đóng trình duyệt và xóa Cookie khỏi hệ thống
                         if (browser) await browser.close();
                         
                         const durationMinutes = Math.floor((Date.now() - session.startTime) / 60000);
                         
+                        // Gửi Embed báo cáo tổng kết về DM
                         const stopEmbed = new EmbedBuilder()
                             .setColor(0xFF0000)
                             .setTitle('🛑 TỔNG KẾT TIẾN TRÌNH SEEDING')
-                            .setDescription('Tiến trình đã dừng và toàn bộ dữ liệu/cookie đã được xóa khỏi hệ thống.')
+                            .setDescription('Tiến trình đã ngắt. Toàn bộ thông tin Cookie và bộ nhớ tạm đã được xóa sạch khỏi hệ thống.')
                             .addFields(
-                                { name: '✉️ Tổng tin nhắn đã gửi', value: `${session.messageCount} tin`, inline: true },
-                                { name: '⏱️ Tổng thời gian chạy', value: `${durationMinutes} phút`, inline: true }
+                                { name: '✉️ Tổng số tin nhắn đã gửi', value: `${session.messageCount} tin`, inline: true },
+                                { name: '⏱️ Tổng thời gian đã chạy', value: `${durationMinutes} phút`, inline: true }
                             )
                             .setTimestamp();
 
