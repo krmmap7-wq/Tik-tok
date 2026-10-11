@@ -56,6 +56,11 @@ embed_store.set_footer(text="Haibara Ai • Dữ liệu mã hóa APTX-4869 24/7"
 # ==================== BOT 1: BOURBON (CHECK & 2FA) ====================
 bot_1 = commands.Bot(command_prefix="/", intents=intents)
 
+@bot_1.event
+async def on_ready():
+    print(f"🟢 Bot Bourbon ({bot_1.user}) đã Trực tuyến!")
+    await bot_1.change_presence(activity=discord.Game(name="🔍 Soi mã 2FA & Check UID"))
+
 @bot_1.slash_command(name="setup_luat", description="Gửi và ghim bảng nội quy cố định kênh Check")
 @commands.has_permissions(administrator=True)
 async def setup_luat_1(ctx):
@@ -92,6 +97,11 @@ async def check_uid(ctx, uid: str):
 # ==================== BOT 2: KAITOU KID (AUTO LIVE) ====================
 bot_2 = commands.Bot(command_prefix="/", intents=intents)
 
+@bot_2.event
+async def on_ready():
+    print(f"🟢 Bot Kaitou Kid ({bot_2.user}) đã Trực tuyến!")
+    await bot_2.change_presence(activity=discord.Game(name="🎩 Ảo thuật Livestream"))
+
 @bot_2.slash_command(name="setup_luat", description="Gửi và ghim bảng nội quy cố định kênh Live")
 @commands.has_permissions(administrator=True)
 async def setup_luat_2(ctx):
@@ -114,6 +124,11 @@ async def auto_live(ctx, link_live: str, noi_dung: str, so_luong: int = 5):
 bot_3 = commands.Bot(command_prefix="/", intents=intents)
 user_points = {}
 
+@bot_3.event
+async def on_ready():
+    print(f"🟢 Bot Conan ({bot_3.user}) đã Trực tuyến!")
+    await bot_3.change_presence(activity=discord.Game(name="⚽ Tương Tác Chéo & Điểm"))
+
 @bot_3.slash_command(name="setup_luat", description="Gửi và ghim bảng nội quy cố định kênh Chéo")
 @commands.has_permissions(administrator=True)
 async def setup_luat_3(ctx):
@@ -132,6 +147,11 @@ async def check_diem(ctx):
 
 # ==================== BOT 4: HAIBARA AI (KHO FILE & INVITE) ====================
 bot_4 = commands.Bot(command_prefix="/", intents=intents)
+
+@bot_4.event
+async def on_ready():
+    print(f"🟢 Bot Haibara ({bot_4.user}) đã Trực tuyến!")
+    await bot_4.change_presence(activity=discord.Game(name="🧪 Quản lý Kho File VIP"))
 
 @bot_4.slash_command(name="setup_luat", description="Gửi và ghim bảng nội quy cố định kênh Kho File")
 @commands.has_permissions(administrator=True)
