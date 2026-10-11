@@ -1,4 +1,4 @@
 py-cord>=2.6.0
 pyotp
 aiohttp
-TikTokLive
+TikTokLive>=6.5.0
