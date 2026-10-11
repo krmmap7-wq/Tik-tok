@@ -7,10 +7,6 @@ import discord
 from discord.ext import commands
 from urllib.parse import urlparse
 
-# ==========================================
-# CẤU HÌNH BOT - PYCORD 2.6+
-# ==========================================
-
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="/", intents=intents)
 
@@ -20,25 +16,20 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/122.0.0.0 Safari/537.36"
     ),
-    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Language": "vi-VN,vi;q=0.9,en-US,en;q=0.8",
 }
 
 TIMEOUT = aiohttp.ClientTimeout(total=15)
 
 
-# ==========================================
-# TIỆN ÍCH
-# ==========================================
-
-def clean_username(value: str) -> str:
+def clean_username(value):
     value = value.strip()
 
     if "tiktok.com/" in value.lower():
         parsed = urlparse(
             value if "://" in value else "https://" + value
         )
-        match = re.match(r"/@([^/?#]+)", parsed.path)
-
+        match = re.search(r"/@([^/?#]+)", parsed.path)
         if match:
             value = match.group(1)
         else:
@@ -52,51 +43,28 @@ def clean_username(value: str) -> str:
     return value
 
 
-def valid_tiktok_url(url: str) -> bool:
-    try:
-        parsed = urlparse(url.strip())
-
-        host = (parsed.hostname or "").lower()
-
-        return (
-            parsed.scheme in ("https", "http")
-            and (
-                host == "tiktok.com"
-                or host.endswith(".tiktok.com")
-            )
-        )
-    except ValueError:
-        return False
-
-
-def format_number(value):
+def number_text(value):
     if isinstance(value, (int, float)):
         return f"{int(value):,}"
     return "Không lấy được"
 
 
-def add_checker(embed, ctx):
+def checker(embed, ctx):
     embed.set_footer(
         text=f"Người check: {ctx.author.display_name}",
         icon_url=ctx.author.display_avatar.url,
     )
 
 
-# ==========================================
-# LẤY THÔNG TIN HỒ SƠ TIKTOK
-# ==========================================
-
 def extract_profile(html):
-    script_patterns = [
+    patterns = [
         r'<script[^>]*id="__UNIVERSAL_DATA_FOR_REHYDRATION__"'
         r'[^>]*>(.*?)</script>',
-        r'<script[^>]*id="SIGI_STATE"'
-        r'[^>]*>(.*?)</script>',
+        r'<script[^>]*id="SIGI_STATE"[^>]*>(.*?)</script>',
     ]
 
-    for pattern in script_patterns:
+    for pattern in patterns:
         match = re.search(pattern, html, re.S)
-
         if not match:
             continue
 
@@ -105,7 +73,7 @@ def extract_profile(html):
         except (ValueError, TypeError):
             continue
 
-        candidates = []
+        users = []
 
         def walk(obj):
             if isinstance(obj, dict):
@@ -113,7 +81,7 @@ def extract_profile(html):
                 stats = obj.get("stats")
 
                 if isinstance(user, dict) and isinstance(stats, dict):
-                    candidates.append((user, stats))
+                    users.append((user, stats))
 
                 for value in obj.values():
                     walk(value)
@@ -124,68 +92,47 @@ def extract_profile(html):
 
         walk(root)
 
-        for user, stats in candidates:
-            avatar = (
-                user.get("avatarLarger")
-                or user.get("avatarMedium")
-                or user.get("avatarThumb")
-                or ""
-            )
-
+        if users:
+            user, stats = users[0]
             return {
-                "nickname": user.get("nickname") or "",
-                "avatar": avatar,
+                "nickname": user.get("nickname", ""),
+                "avatar": (
+                    user.get("avatarLarger")
+                    or user.get("avatarMedium")
+                    or user.get("avatarThumb")
+                    or ""
+                ),
                 "followers": stats.get("followerCount"),
                 "likes": stats.get("heartCount"),
-                "verified": user.get("verified", False),
             }
 
     return None
 
 
-async def fetch_profile(session, username):
+async def get_profile(session, username):
     url = f"https://www.tiktok.com/@{username}"
 
     try:
-        async with session.get(
-            url,
-            allow_redirects=True,
-        ) as response:
-
+        async with session.get(url, allow_redirects=True) as response:
             if response.status != 200:
-                return None, (
-                    f"TikTok trả về HTTP {response.status}"
-                )
+                return None
 
             html = await response.text()
-            data = extract_profile(html)
+            return extract_profile(html)
 
-            if data is None:
-                return None, (
-                    "Không đọc được dữ liệu hồ sơ. "
-                    "TikTok có thể đã thay đổi trang hoặc "
-                    "chặn yêu cầu từ Railway."
-                )
+    except (aiohttp.ClientError, TimeoutError):
+        return None
 
-            return data, None
-
-    except (aiohttp.ClientError, TimeoutError) as error:
-        return None, f"Lỗi kết nối: {type(error).__name__}"
-
-
-# ==========================================
-# BOT ONLINE
-# ==========================================
 
 @bot.event
 async def on_ready():
-    print(f"Bot TikTok online: {bot.user}")
+    print(f"Bot online: {bot.user}", flush=True)
 
     try:
         await bot.sync_commands()
-        print("Đã đồng bộ slash commands.")
-    except Exception as error:
-        print(f"Lỗi đồng bộ lệnh: {error}")
+        print("Slash commands synced.", flush=True)
+    except Exception as exc:
+        print(f"Sync error: {exc}", flush=True)
 
 
 # ==========================================
@@ -194,13 +141,13 @@ async def on_ready():
 
 @bot.slash_command(
     name="checkacc",
-    description="Kiểm tra hồ sơ TikTok, avatar, follower và tổng tim",
+    description="Kiểm tra tài khoản TikTok",
 )
-async def check_acc(
+async def checkacc(
     ctx: discord.ApplicationContext,
     username: discord.Option(
         str,
-        description="Nhập @username hoặc link hồ sơ TikTok",
+        description="Username hoặc link hồ sơ TikTok",
     ),
 ):
     await ctx.defer()
@@ -216,80 +163,59 @@ async def check_acc(
 
     profile_url = f"https://www.tiktok.com/@{name}"
 
-    try:
-        async with aiohttp.ClientSession(
-            headers=HEADERS,
-            timeout=TIMEOUT,
-        ) as session:
+    async with aiohttp.ClientSession(
+        headers=HEADERS,
+        timeout=TIMEOUT,
+    ) as session:
+        data = await get_profile(session, name)
 
-            data, error = await fetch_profile(session, name)
-
-        if data is None:
-            embed = discord.Embed(
-                title="⚠️ KHÔNG XÁC ĐỊNH ĐƯỢC TÀI KHOẢN",
-                description=(
-                    f"Không lấy được dữ liệu của `@{name}`.\n"
-                    f"{error}\n\n"
-                    "Lỗi truy cập không có nghĩa là tài khoản "
-                    "đã bị khóa hoặc không tồn tại."
-                ),
-                color=discord.Color.orange(),
-            )
-            embed.add_field(
-                name="🔗 Hồ sơ",
-                value=f"[Mở TikTok]({profile_url})",
-                inline=False,
-            )
-            add_checker(embed, ctx)
-            await ctx.followup.send(embed=embed)
-            return
-
+    if not data:
         embed = discord.Embed(
-            title="📱 THÔNG TIN TÀI KHOẢN TIKTOK",
-            description=f"**@{name}**",
-            url=profile_url,
-            color=discord.Color.green(),
+            title="⚠️ CHƯA XÁC MINH ĐƯỢC",
+            description=(
+                f"Không lấy được dữ liệu @{name}.\n"
+                "Không thể kết luận tài khoản DIE vì TikTok "
+                "có thể chặn Railway hoặc thay đổi trang."
+            ),
+            color=discord.Color.orange(),
         )
-
         embed.add_field(
-            name="👤 Tên hiển thị",
-            value=data["nickname"] or "Không lấy được",
+            name="Hồ sơ",
+            value=f"[Mở TikTok]({profile_url})",
             inline=False,
         )
-        embed.add_field(
-            name="👥 Followers",
-            value=format_number(data["followers"]),
-            inline=True,
-        )
-        embed.add_field(
-            name="❤️ Tổng tim tài khoản",
-            value=format_number(data["likes"]),
-            inline=True,
-        )
-        embed.add_field(
-            name="☑️ Tài khoản xác minh",
-            value="Có" if data["verified"] else "Không",
-            inline=True,
-        )
-        embed.add_field(
-            name="🔗 Hồ sơ TikTok",
-            value=f"[Nhấn để xem]({profile_url})",
-            inline=False,
-        )
-
-        if data["avatar"]:
-            embed.set_thumbnail(url=data["avatar"])
-
-        add_checker(embed, ctx)
+        checker(embed, ctx)
         await ctx.followup.send(embed=embed)
+        return
 
-    except Exception as error:
-        print(f"Lỗi /checkacc: {error}")
-        await ctx.followup.send(
-            "⚠️ Có lỗi khi kiểm tra tài khoản. "
-            "Hãy thử lại sau.",
-            ephemeral=True,
-        )
+    embed = discord.Embed(
+        title="🟢 TÀI KHOẢN TÌM THẤY",
+        description=f"**@{name}**",
+        url=profile_url,
+        color=discord.Color.green(),
+    )
+
+    embed.add_field(
+        name="Tên hiển thị",
+        value=data["nickname"] or "Không có dữ liệu",
+        inline=False,
+    )
+    embed.add_field(
+        name="👥 Follower",
+        value=number_text(data["followers"]),
+        inline=True,
+    )
+    embed.add_field(
+        name="❤️ Tổng tim",
+        value=number_text(data["likes"]),
+        inline=True,
+    )
+
+    if data["avatar"]:
+        embed.set_thumbnail(url=data["avatar"])
+
+    checker(embed, ctx)
+    await ctx.followup.send(embed=embed)
 
 
 # ==========================================
@@ -298,9 +224,9 @@ async def check_acc(
 
 @bot.slash_command(
     name="checklive",
-    description="Kiểm tra link live và hiển thị avatar TikTok",
+    description="Kiểm tra link livestream TikTok",
 )
-async def check_live(
+async def checklive(
     ctx: discord.ApplicationContext,
     link_live: discord.Option(
         str,
@@ -310,33 +236,34 @@ async def check_live(
     await ctx.defer()
 
     link = link_live.strip()
-
     if not link.startswith(("https://", "http://")):
         link = "https://" + link
 
-    if not valid_tiktok_url(link):
-        await ctx.followup.send(
-            "❌ Hãy nhập link thuộc tên miền TikTok hợp lệ.",
-            ephemeral=True,
-        )
-        return
-
     try:
+        parsed = urlparse(link)
+        host = (parsed.hostname or "").lower()
+
+        if not (
+            host == "tiktok.com"
+            or host.endswith(".tiktok.com")
+        ):
+            await ctx.followup.send(
+                "❌ Link không thuộc TikTok.",
+                ephemeral=True,
+            )
+            return
+
         async with aiohttp.ClientSession(
             headers=HEADERS,
             timeout=TIMEOUT,
         ) as session:
-
-            # Mở link, cho phép chuyển hướng link rút gọn.
             async with session.get(
                 link,
                 allow_redirects=True,
             ) as response:
                 real_link = str(response.url)
-                status = response.status
-                html = await response.text()
+                http_status = response.status
 
-            # Xác định username từ URL sau chuyển hướng.
             match = re.search(
                 r"tiktok\.com/@([^/?#]+)",
                 real_link,
@@ -344,94 +271,58 @@ async def check_live(
             )
 
             name = clean_username(match.group(1)) if match else ""
+            data = await get_profile(session, name) if name else None
 
-            data = None
-            profile_error = None
-
-            if name:
-                data, profile_error = await fetch_profile(
-                    session, name
-                )
-
-        # HTML có room_id không đủ chứng minh live đang phát.
-        # Không tự kết luận live sống/chết khi chưa có API live.
         embed = discord.Embed(
-            title="🔎 KIỂM TRA LIVESTREAM TIKTOK",
+            title="🔎 KẾT QUẢ KIỂM TRA LIVE",
             description=(
-                "Đã truy cập trang TikTok, nhưng chưa có nguồn "
-                "dữ liệu live đáng tin cậy để xác nhận phòng "
-                "đang phát hay đã kết thúc."
+                "Chưa xác minh được trạng thái phát trực tiếp. "
+                "HTTP thành công không đồng nghĩa live đang chạy."
             ),
             url=real_link,
             color=discord.Color.orange(),
         )
 
         embed.add_field(
-            name="🌐 HTTP",
-            value=str(status),
+            name="Trạng thái",
+            value="⚠️ Chưa xác minh",
             inline=True,
         )
-
         embed.add_field(
-            name="🔴 Trạng thái live",
-            value="Chưa xác minh được",
+            name="HTTP",
+            value=str(http_status),
             inline=True,
         )
-
         embed.add_field(
-            name="🔗 Link livestream",
-            value=f"[Mở TikTok]({real_link})",
+            name="Link live",
+            value=f"[Mở livestream]({real_link})",
             inline=False,
         )
 
-        if data:
+        if name:
             embed.add_field(
-                name="👤 Tài khoản",
+                name="Tài khoản",
                 value=f"@{name}",
-                inline=False,
-            )
-            embed.add_field(
-                name="👥 Followers",
-                value=format_number(data["followers"]),
-                inline=True,
-            )
-            embed.add_field(
-                name="❤️ Tổng tim tài khoản",
-                value=format_number(data["likes"]),
                 inline=True,
             )
 
-            if data["avatar"]:
-                embed.set_thumbnail(url=data["avatar"])
+        if data and data["avatar"]:
+            embed.set_thumbnail(url=data["avatar"])
 
-        elif name:
-            embed.add_field(
-                name="ℹ️ Thông tin hồ sơ",
-                value=profile_error or "Không lấy được dữ liệu.",
-                inline=False,
-            )
-
-        add_checker(embed, ctx)
+        checker(embed, ctx)
         await ctx.followup.send(embed=embed)
 
-    except Exception as error:
-        print(f"Lỗi /checklive: {error}")
+    except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
+        print(f"checklive error: {exc}", flush=True)
         await ctx.followup.send(
-            "⚠️ Không truy cập được trang live. "
-            "Hãy kiểm tra link hoặc thử lại sau.",
+            "⚠️ Không truy cập được link TikTok.",
             ephemeral=True,
         )
 
 
-# ==========================================
-# CHẠY BOT TRÊN RAILWAY
-# ==========================================
-
 token = os.getenv("DISCORD_TOKEN")
 
 if not token:
-    raise RuntimeError(
-        "Thiếu biến môi trường DISCORD_TOKEN trong Railway."
-    )
+    raise RuntimeError("Railway thiếu biến DISCORD_TOKEN.")
 
 bot.run(token)
