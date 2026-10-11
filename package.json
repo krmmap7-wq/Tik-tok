@@ -1,16 +1,15 @@
 {
-  "name": "tiktok-seeding-bot",
+  "name": "tiktok-live-bot",
   "version": "2.0.0",
-  "description": "Discord Bot Seeding TikTok Live Remote Controller",
+  "description": "Discord Bot TikTok Live Seeding Pro",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "discord.js": "^14.14.1",
-    "puppeteer": "^21.7.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "puppeteer": "^22.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
