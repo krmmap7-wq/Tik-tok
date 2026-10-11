@@ -25,14 +25,19 @@ embed_check.add_field(name="📌 CÚ PHÁP LỆNH", value="• `/2fa <secret_key
 embed_check.add_field(name="⚠️ QUY ĐỊNH 24/7", value="1. Chỉ dùng lệnh tại kênh này, cấm spam.\n2. Lệnh trả kết quả ẩn, chống trôi kênh 100%.", inline=False)
 embed_check.set_footer(text="Mật danh Bourbon • Giám sát 24/7")
 
+# Cập nhật Embed Nội Quy mới cho kênh Check Live/Acc TikTok
 embed_live = discord.Embed(
-    title="🎩 KAITOU KID SHOW - NỘI QUY AUTO LIVE BOOSTER",
-    description="Hệ thống hỗ trợ tương tác Livestream rực rỡ trước ánh đèn sân khấu.",
+    title="🎩 KAITOU KID SHOW - KÊNH CHECK LIVE & ACC TIKTOK",
+    description="Hệ thống kiểm tra trạng thái Livestream và Tài khoản TikTok siêu tốc.",
     color=discord.Color.blue()
 )
-embed_live.add_field(name="📌 CÚ PHÁP LỆNH", value="• `/autolive <link> <noi_dung> <so_luong>`: Buff comment livestream.", inline=False)
-embed_live.add_field(name="⚠️ QUY ĐỊNH 24/7", value="1. Tối đa 20 comment mỗi đơn.\n2. Cấm link đồi trụy / vi phạm pháp luật.", inline=False)
-embed_live.set_footer(text="Kaitou Kid • Sân khấu ảo thuật 24/7")
+embed_live.add_field(
+    name="📌 CÚ PHÁP LỆNH", 
+    value="• `/checklive <link>`: Check trạng thái Livestream (Live/Die).\n• `/checkacc <username>`: Check trạng thái tài khoản TikTok (Sống/Ban).", 
+    inline=False
+)
+embed_live.add_field(name="⚠️ QUY ĐỊNH 24/7", value="1. Chỉ dùng lệnh đúng kênh quy định.\n2. Nghiêm cấm spam lệnh liên tục.", inline=False)
+embed_live.set_footer(text="Kaitou Kid • Giám sát TikTok 24/7")
 
 embed_cheo = discord.Embed(
     title="⚽ EDOGAWA CONAN - NỘI QUY TƯƠNG TÁC CHÉO",
@@ -94,13 +99,13 @@ async def check_uid(ctx, uid: str):
                 await ctx.respond(f"🔴 **UID {uid}:** DIE / PRIVATE", ephemeral=True)
 
 
-# ==================== BOT 2: KAITOU KID (AUTO LIVE) ====================
+# ==================== BOT 2: KAITOU KID (CHECK LIVE & ACC TIKTOK) ====================
 bot_2 = commands.Bot(command_prefix="/", intents=intents)
 
 @bot_2.event
 async def on_ready():
     print(f"🟢 Bot Kaitou Kid ({bot_2.user}) đã Trực tuyến!")
-    await bot_2.change_presence(activity=discord.Game(name="🎩 Ảo thuật Livestream"))
+    await bot_2.change_presence(activity=discord.Game(name="🎩 Check Live & Acc TikTok"))
 
 @bot_2.slash_command(name="setup_luat", description="Gửi và ghim bảng nội quy cố định kênh Live")
 @commands.has_permissions(administrator=True)
@@ -109,15 +114,90 @@ async def setup_luat_2(ctx):
     await msg.pin()
     await ctx.respond("✅ Đã ghim bảng nội quy Kaitou Kid 24/7 thành công!", ephemeral=True)
 
-@bot_2.slash_command(name="autolive", description="Buff comment Livestream")
-async def auto_live(ctx, link_live: str, noi_dung: str, so_luong: int = 5):
+# LỆNH 1: CHECK LIVE TIKTOK (LIVE / DIE)
+@bot_2.slash_command(name="checklive", description="Kiểm tra trạng thái Livestream TikTok (Sống hay Die)")
+async def check_live(ctx, link_live: str):
     if ctx.guild.id != GUILD_ID or ctx.channel.id != CHANNEL_LIVE:
         await ctx.respond("❌ Lệnh này chỉ được dùng tại kênh Live quy định!", ephemeral=True)
         return
-    if so_luong > 20:
-        await ctx.respond("⚠️ Tối đa 20 comment cho 1 đơn!", ephemeral=True)
+
+    await ctx.defer(ephemeral=True)
+    
+    # Xử lý lấy link gốc nếu là link vt.tiktok.com
+    real_link = link_live
+    if "vt.tiktok.com" in link_live or "vm.tiktok.com" in link_live:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(link_live, allow_redirects=True, timeout=5) as resp:
+                    real_link = str(resp.url)
+        except Exception:
+            pass
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(real_link, headers=headers, timeout=10) as resp:
+                html = await resp.text()
+                
+                # Kiểm tra trạng thái Live trong mã HTML
+                if "Live Room Ended" in html or "room_id" not in html or resp.status != 200:
+                    embed = discord.Embed(
+                        title="🔴 TRẠNG THÁI: LIVE ĐÃ TẮT (DIE)",
+                        description=f"Phòng Livestream này đã kết thúc hoặc không tồn tại.",
+                        color=discord.Color.red()
+                    )
+                else:
+                    embed = discord.Embed(
+                        title="🟢 TRẠNG THÁI: LIVE ĐANG PHÁT (SỐNG)",
+                        description=f"Phòng Livestream vẫn đang phát trực tiếp bình thường!",
+                        color=discord.Color.green()
+                    )
+                embed.add_field(name="📌 Link kiểm tra", value=f"[Truy cập phòng Live]({real_link})", inline=False)
+                await ctx.respond(embed=embed, ephemeral=True)
+    except Exception as e:
+        await ctx.respond(f"⚠️ Lỗi kết nối tới TikTok: `{e}`", ephemeral=True)
+
+# LỆNH 2: CHECK ACC TIKTOK (SỐNG / BAN)
+@bot_2.slash_command(name="checkacc", description="Kiểm tra tài khoản TikTok (Sống hay đã bị Ban/Die)")
+async def check_acc(ctx, username: str):
+    if ctx.guild.id != GUILD_ID or ctx.channel.id != CHANNEL_LIVE:
+        await ctx.respond("❌ Lệnh này chỉ được dùng tại kênh Live quy định!", ephemeral=True)
         return
-    await ctx.respond(f"🚀 **Đã nhận đơn Live!**\n📌 Link: {link_live}\n📝 Nội dung: `{noi_dung}`", ephemeral=True)
+
+    await ctx.defer(ephemeral=True)
+
+    # Làm sạch username
+    clean_user = username.replace("https://www.tiktok.com/@", "").replace("@", "").strip().split("/")[0]
+    profile_url = f"https://www.tiktok.com/@{clean_user}"
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(profile_url, headers=headers, timeout=10) as resp:
+                if resp.status == 404:
+                    embed = discord.Embed(
+                        title="❌ TÀI KHOẢN ĐÃ DIE / BỊ KHÓA",
+                        description=f"Tài khoản `@{clean_user}` không tồn tại hoặc đã bị khóa.",
+                        color=discord.Color.red()
+                    )
+                else:
+                    html = await resp.text()
+                    if "Couldn't find this account" in html or "This account was banned" in html:
+                        embed = discord.Embed(
+                            title="❌ TÀI KHOẢN ĐÃ DIE / BỊ BAN",
+                            description=f"Tài khoản `@{clean_user}` đã bị TikTok cấm hoạt động.",
+                            color=discord.Color.red()
+                        )
+                    else:
+                        embed = discord.Embed(
+                            title="✅ TÀI KHOẢN HOẠT ĐỘNG (SỐNG)",
+                            description=f"Tài khoản `@{clean_user}` hoàn toàn bình thường.",
+                            color=discord.Color.green()
+                        )
+                embed.add_field(name="🔗 Profile", value=f"[Trang cá nhân]({profile_url})", inline=False)
+                await ctx.respond(embed=embed, ephemeral=True)
+    except Exception as e:
+        await ctx.respond(f"⚠️ Lỗi khi check tài khoản: `{e}`", ephemeral=True)
 
 
 # ==================== BOT 3: EDOGAWA CONAN (TƯƠNG TÁC CHÉO) ====================
