@@ -1,4 +1,4 @@
-import threading
+import asyncio
 import os
 import pyotp
 import aiohttp
@@ -168,19 +168,19 @@ async def lay_file(ctx, ten_file: str):
     await ctx.respond(f"📂 **Haibara đang truy xuất dữ liệu file `{ten_file}`...**", ephemeral=True)
 
 
-# ==================== CHẠY SONG SONG 4 BOT DÙNG THREADING ====================
+# ==================== CHẠY BẤT ĐỒNG BỘ 4 BOT BẰNG ASYNCIO ====================
+async def main():
+    token_1 = os.getenv("TOKEN_BOT_1")
+    token_2 = os.getenv("TOKEN_BOT_2")
+    token_3 = os.getenv("TOKEN_BOT_3")
+    token_4 = os.getenv("TOKEN_BOT_4")
+
+    await asyncio.gather(
+        bot_1.start(token_1),
+        bot_2.start(token_2),
+        bot_3.start(token_3),
+        bot_4.start(token_4)
+    )
+
 if __name__ == "__main__":
-    t1 = threading.Thread(target=lambda: bot_1.run(os.getenv("TOKEN_BOT_1")))
-    t2 = threading.Thread(target=lambda: bot_2.run(os.getenv("TOKEN_BOT_2")))
-    t3 = threading.Thread(target=lambda: bot_3.run(os.getenv("TOKEN_BOT_3")))
-    t4 = threading.Thread(target=lambda: bot_4.run(os.getenv("TOKEN_BOT_4")))
-
-    t1.start()
-    t2.start()
-    t3.start()
-    t4.start()
-
-    t1.join()
-    t2.join()
-    t3.join()
-    t4.join()
+    asyncio.run(main())
