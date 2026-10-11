@@ -1,0 +1,16 @@
+{
+  "name": "tiktok-seeding-bot",
+  "version": "2.0.0",
+  "description": "Discord Bot Seeding TikTok Live Remote Controller",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "puppeteer": "^21.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
