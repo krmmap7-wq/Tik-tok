@@ -4,7 +4,6 @@ const {
     TextInputBuilder, TextInputStyle, ActionRowBuilder 
 } = require('discord.js');
 
-// Sử dụng puppeteer-extra kết hợp Stealth Plugin né anti-bot
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 puppeteer.use(StealthPlugin());
@@ -13,60 +12,66 @@ const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages]
 });
 
-// Map quản lý phiên chạy của từng User
+// Map lưu trữ các tiến trình đang chạy
 const activeSessions = new Map();
 
-// Đăng ký các lệnh Slash
+// Đăng ký lệnh Slash
 const commands = [
     new SlashCommandBuilder()
         .setName('live')
-        .setDescription('🚀 Khởi động công cụ Seeding TikTok Live Pro 24/24'),
+        .setDescription('🚀 Khởi động bảng điều khiển TikTok Live Seeding PRO'),
     new SlashCommandBuilder()
         .setName('stop')
         .setDescription('🛑 Dừng tiến trình seeding và dọn dẹp hệ thống')
 ].map(cmd => cmd.toJSON());
 
 client.once('ready', async () => {
-    console.log(`🤖 Bot PRO đã sẵn sàng hoạt động 24/24: ${client.user.tag}`);
+    console.log(`=================================`);
+    console.log(`🤖 BOT SEEDING PRO DA ONLINE!`);
+    console.log(`👤 Name: ${client.user.tag}`);
+    console.log(`=================================`);
+
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
     try {
         await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-        console.log('✅ Đã cập nhật thành công các lệnh Slash!');
+        console.log('✅ Đã đăng ký thành công danh mục lệnh!');
     } catch (error) {
-        console.error('Lỗi đăng ký lệnh:', error);
+        console.error('❌ Lỗi đăng ký lệnh Slash:', error);
     }
 });
 
 client.on('interactionCreate', async interaction => {
+    // 1. Xử lý Lệnh Slash
     if (interaction.isChatInputCommand()) {
         if (interaction.commandName === 'live') {
             const modal = new ModalBuilder()
                 .setCustomId('live_modal')
-                .setTitle('⚙️ Cấu Hình TikTok Live Seeding PRO');
+                .setTitle('⚡ TIKTOK LIVE SEEDING CONTROL PANEL');
 
             const cookieInput = new TextInputBuilder()
                 .setCustomId('cookie_input')
-                .setLabel('Dán chuỗi Cookie TikTok')
+                .setLabel('🍪 CHUỖI COOKIE TIKTOK (COPY TỪ STAY)')
                 .setStyle(TextInputStyle.Paragraph)
-                .setPlaceholder('session_id=...; ttwid=...;')
+                .setPlaceholder('Dán toàn bộ Cookie tại đây...')
                 .setRequired(true);
 
             const urlInput = new TextInputBuilder()
                 .setCustomId('url_input')
-                .setLabel('Link phòng Livestream TikTok')
+                .setLabel('🔗 LINK PHÒNG LIVESTREAM')
                 .setStyle(TextInputStyle.Short)
                 .setPlaceholder('https://www.tiktok.com/@username/live')
                 .setRequired(true);
 
             const messageInput = new TextInputBuilder()
                 .setCustomId('message_input')
-                .setLabel('Nội dung tin nhắn spam')
+                .setLabel('💬 NỘI DUNG NHÁT TIN SPAM')
                 .setStyle(TextInputStyle.Short)
+                .setPlaceholder('Nhập nội dung muốn gửi...')
                 .setRequired(true);
 
             const delayInput = new TextInputBuilder()
                 .setCustomId('delay_input')
-                .setLabel('Thời gian chờ giữa các tin (giây)')
+                .setLabel('⏱️ THỜI GIAN DELAY NGHỈ (GIÂY)')
                 .setValue('5')
                 .setStyle(TextInputStyle.Short)
                 .setRequired(true);
@@ -85,18 +90,39 @@ client.on('interactionCreate', async interaction => {
             if (activeSessions.has(userId)) {
                 const session = activeSessions.get(userId);
                 session.isStopped = true;
-                await interaction.reply({ content: '🛑 Đã gửi tín hiệu dừng! Đang đóng trình duyệt và xóa dữ liệu...', ephemeral: true });
+
+                const stopEmbed = new EmbedBuilder()
+                    .setColor(0xFFA500)
+                    .setTitle('⏳ ĐANG XỬ LÝ LỆNH DỪNG...')
+                    .setDescription('```fix\nHệ thống đang ngắt trình duyệt và dọn dẹp bộ nhớ tạm...\n```')
+                    .setTimestamp();
+
+                await interaction.reply({ embeds: [stopEmbed], ephemeral: true });
             } else {
-                await interaction.reply({ content: '⚠️ Bạn không có tiến trình seeding nào đang chạy.', ephemeral: true });
+                const noSessionEmbed = new EmbedBuilder()
+                    .setColor(0xFF4500)
+                    .setTitle('⚠️ KHÔNG TÌM THẤY TIẾN TRÌNH')
+                    .setDescription('Hiện tại bạn không có phiên seeding nào đang chạy.')
+                    .setTimestamp();
+
+                await interaction.reply({ embeds: [noSessionEmbed], ephemeral: true });
             }
         }
     } 
+    
+    // 2. Xử lý Nộp Bảng Modal
     else if (interaction.isModalSubmit()) {
         if (interaction.customId === 'live_modal') {
             const userId = interaction.user.id;
             
             if (activeSessions.has(userId)) {
-                return interaction.reply({ content: '⚠️ Bạn đang có một phiên seeding chạy rồi! Hãy dùng lệnh `/stop` trước.', ephemeral: true });
+                const existEmbed = new EmbedBuilder()
+                    .setColor(0xFFCC00)
+                    .setTitle('⚠️ TIẾN TRÌNH ĐANG CHẠY')
+                    .setDescription('Bạn đang có một phiên seeding hoạt động! Hãy dùng `/stop` trước khi tạo phiên mới.')
+                    .setTimestamp();
+
+                return interaction.reply({ embeds: [existEmbed], ephemeral: true });
             }
 
             const cookieString = interaction.fields.getTextInputValue('cookie_input');
@@ -104,11 +130,17 @@ client.on('interactionCreate', async interaction => {
             const messageText = interaction.fields.getTextInputValue('message_input');
             const delaySec = Math.max(2, parseInt(interaction.fields.getTextInputValue('delay_input')) || 5);
 
-            await interaction.reply({ content: '🔍 Đang kết nối trình duyệt ẩn danh (Stealth Mode) và truy cập phòng Live...', ephemeral: true });
+            // Báo khởi động ngầm
+            const initEmbed = new EmbedBuilder()
+                .setColor(0x00BFFF)
+                .setTitle('⚙️ KHỞI ĐỘNG HỆ THỐNG STEALTH PRO')
+                .setDescription('```yaml\nĐang vượt tường lửa TikTok & nạp Cookie bảo mật...\n```')
+                .setTimestamp();
+
+            await interaction.reply({ embeds: [initEmbed], ephemeral: true });
 
             let browser;
             try {
-                // Khởi tạo Puppeteer với chế độ Stealth chống phát hiện 100%
                 browser = await puppeteer.launch({
                     headless: 'new',
                     args: [
@@ -126,7 +158,7 @@ client.on('interactionCreate', async interaction => {
                 const page = await browser.newPage();
                 await page.setViewport({ width: 1440, height: 900 });
 
-                // Chuẩn hóa và parse danh sách Cookie
+                // Lọc Cookie chuẩn domain .tiktok.com
                 const cookies = cookieString.split(';').map(pair => {
                     const idx = pair.indexOf('=');
                     if (idx === -1) return null;
@@ -146,26 +178,32 @@ client.on('interactionCreate', async interaction => {
 
                 if (cookies.length === 0) {
                     await browser.close();
-                    return interaction.user.send('❌ **LỖI:** Định dạng Cookie không hợp lệ! Vui lòng sao chép lại toàn bộ Cookie từ Stay.').catch(() => {});
+                    const errCookieEmbed = new EmbedBuilder()
+                        .setColor(0xFF0055)
+                        .setTitle('❌ ĐỊNH DẠNG COOKIE SAI')
+                        .setDescription('Mã Cookie bạn dán không hợp lệ. Vui lòng copy lại chính xác từ app Stay.')
+                        .setTimestamp();
+
+                    return interaction.user.send({ embeds: [errCookieEmbed] }).catch(() => {});
                 }
 
                 await page.setCookie(...cookies);
 
-                // Mở link phòng Live
-                console.log(`[PRO] Đang truy cập: ${liveUrl}`);
-                await page.goto(liveUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+                // Giả lập Mobile Safari User-Agent ăn khớp với Cookie iPhone
+                await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1');
 
-                // Giả lập thao tác cuộn nhẹ trang để kích hoạt giao diện
-                await new Promise(r => setTimeout(r, 4000));
-                await page.evaluate(() => window.scrollBy(0, 150));
+                console.log(`[PRO SETUP] Mở link: ${liveUrl}`);
+                await page.goto(liveUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                await new Promise(r => setTimeout(r, 5000));
 
-                // Danh sách Selector khung chat đa dạng của TikTok
+                // Bắt khung chat
                 const chatSelectors = [
                     'div[contenteditable="true"]',
                     'textarea[data-e2e="chat-input"]',
-                    'div[placeholder*="Say something"]',
-                    'div[placeholder*="Nói gì đó"]',
-                    'textarea'
+                    'input[placeholder*="Say something"]',
+                    'input[placeholder*="Nói gì đó"]',
+                    'textarea',
+                    'input'
                 ];
 
                 let targetSelector = null;
@@ -181,71 +219,53 @@ client.on('interactionCreate', async interaction => {
 
                 if (!targetSelector) {
                     await browser.close();
-                    return interaction.user.send('❌ **LỖI ĐĂNG NHẬP:** Không tìm thấy khung chat! Cookie có thể đã hết hạn, tài khoản bị hạn chế hoặc phòng Live này chặn comment.').catch(() => {});
+                    const errLoginEmbed = new EmbedBuilder()
+                        .setColor(0xFF0055)
+                        .setTitle('❌ LỖI KẾT NỐI PHÒNG LIVE')
+                        .setDescription('Không mở được khung chat! Rất có thể:\n• Cookie đã bị hết hạn hoặc sai phiên.\n• TikTok yêu cầu xác minh Captcha hình ảnh.\n• Phòng Live bị khóa tính năng bình luận.')
+                        .setTimestamp();
+
+                    return interaction.user.send({ embeds: [errLoginEmbed] }).catch(() => {});
                 }
 
-                // Gửi Embed xác nhận kết nối thành công về DM
-                const successEmbed = new EmbedBuilder()
-                    .setColor(0x28A745)
-                    .setTitle('🚀 KẾT NỐI & SEEDING THÀNH CÔNG (PRO)')
-                    .setDescription('Trình duyệt Stealth đã vượt qua lớp kiểm tra bảo mật và bắt đầu gửi tin nhắn.')
+                // GỬI BẢNG DASHBOARD THÀNH CÔNG VỀ DM
+                const dashboardEmbed = new EmbedBuilder()
+                    .setColor(0x00FF66)
+                    .setTitle('🚀 TIKTOK SEEDING DASHBOARD [ONLINE]')
+                    .setThumbnail('https://cdn-icons-png.flaticon.com/512/3046/3046124.png')
+                    .setDescription('```ansi\n\u001b[1;32m[STATUS] Đã kết nối thành công & đang chạy ngầm 24/24\u001b[0m\n```')
                     .addFields(
-                        { name: '🔗 Link Live', value: liveUrl },
-                        { name: '💬 Nội dung', value: messageText },
-                        { name: '⏱️ Độ trễ', value: `${delaySec} giây/tin` }
+                        { name: '📌 Link Phòng Live', value: `[Bấm để mở phòng Live](${liveUrl})`, inline: false },
+                        { name: '💬 Nội Dung Spam', value: `\`\`\`${messageText}\`\`\``, inline: false },
+                        { name: '⏱️ Độ Trễ Gửi', value: `\`${delaySec} Giây / Tin\``, inline: true },
+                        { name: '🛡️ Bảo Mật', value: '`Stealth Mode Active`', inline: true }
                     )
-                    .setFooter({ text: 'Dùng lệnh /stop tại kênh chat để dừng tiến trình.' })
+                    .setFooter({ text: 'Dùng lệnh /stop tại Discord để ngắt tiến trình.' })
                     .setTimestamp();
 
-                await interaction.user.send({ embeds: [successEmbed] }).catch(() => {});
+                await interaction.user.send({ embeds: [dashboardEmbed] }).catch(() => {});
 
-                // Khởi tạo phiên chạy
+                // Khởi tạo phiên
                 const session = { isStopped: false, messageCount: 0, startTime: Date.now() };
                 activeSessions.set(userId, session);
 
-                // Vòng lặp gửi tin nhắn
+                // Vòng lặp gõ tin nhắn
                 (async () => {
                     try {
                         while (!session.isStopped) {
                             try {
                                 await page.click(targetSelector);
-                                // Gõ từ từ giống người thật
-                                await page.type(targetSelector, messageText, { delay: 70 });
+                                await page.type(targetSelector, messageText, { delay: 60 });
                                 await page.keyboard.press('Enter');
                                 session.messageCount++;
                             } catch (err) {
-                                console.log('[PRO] Thử lại thao tác gõ chat...', err.message);
+                                console.log('[RETRY] Đang thử gõ lại vào ô chat...');
                             }
                             await new Promise(r => setTimeout(r, delaySec * 1000));
                         }
                     } finally {
-                        // Tự động đóng trình duyệt & giải phóng bộ nhớ
                         if (browser) await browser.close();
 
                         const durationMinutes = Math.max(1, Math.round((Date.now() - session.startTime) / 60000));
 
-                        const stopEmbed = new EmbedBuilder()
-                            .setColor(0xDC3545)
-                            .setTitle('🛑 BÁO CÁO TỔNG KẾT TIẾN TRÌNH')
-                            .setDescription('Tiến trình đã kết thúc an toàn. Toàn bộ thông tin phiên làm việc và Cookie đã được xóa hoàn toàn khỏi bộ nhớ tạm.')
-                            .addFields(
-                                { name: '✉️ Tổng tin nhắn đã gửi', value: `${session.messageCount} tin`, inline: true },
-                                { name: '⏱️ Thời gian hoạt động', value: `${durationMinutes} phút`, inline: true }
-                            )
-                            .setTimestamp();
-
-                        await interaction.user.send({ embeds: [stopEmbed] }).catch(() => {});
-                        activeSessions.delete(userId);
-                    }
-                })();
-
-            } catch (error) {
-                if (browser) await browser.close();
-                console.error('[PRO ERROR]:', error);
-                await interaction.user.send(`❌ **LỖI HỆ THỐNG:** ${error.message}`).catch(() => {});
-            }
-        }
-    }
-});
-
-client.login(process.env.DISCORD_TOKEN);
+                        // GỬI EMBED BÁO CÁ
