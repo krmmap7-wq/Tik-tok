@@ -1,551 +1,795 @@
 
 import os
-import re
-import json
 import asyncio
+import logging
+import time
+from zoneinfo import ZoneInfo
+
 import aiohttp
 import discord
+import yt_dlp
+from discord.ext import commands, tasks
 
-from urllib.parse import urlparse
-from discord.ext import commands
-from TikTokLive import TikTokLiveClient
+# =====================================================
+# ANIME WEATHER ULTIMATE
+# Persistent button panel + automatic weather + music
+# =====================================================
 
-# =========================
-# CONFIG
-# =========================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+log = logging.getLogger("anime-weather")
 
-intents = discord.Intents.default()
-bot = commands.Bot(command_prefix="/", intents=intents)
+TOKEN = os.getenv("DISCORD_TOKEN", "").strip()
+WEATHER_CHANNEL_ID = int(os.getenv("WEATHER_CHANNEL_ID", "0") or 0)
+PANEL_CHANNEL_ID = int(os.getenv("PANEL_CHANNEL_ID", "0") or 0)
+MUSIC_VOICE_CHANNEL_ID = int(os.getenv("MUSIC_VOICE_CHANNEL_ID", "0") or 0)
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0)
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/131.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "en-US,en;q=0.9,vi;q=0.8",
+AUTO_MUSIC_QUERY = os.getenv(
+    "AUTO_MUSIC_QUERY", "anime lofi morning mix"
+).strip()
+MUSIC_MINUTES = max(1, int(os.getenv("AUTO_MUSIC_MINUTES", "30") or 30))
+MORNING_HOUR = int(os.getenv("MORNING_HOUR", "7") or 7)
+MORNING_MINUTE = int(os.getenv("MORNING_MINUTE", "0") or 0)
+
+KST = ZoneInfo("Asia/Seoul")
+WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
+PANEL_MARKER = "ANIME_WEATHER_PANEL_V1"
+
+CITIES = {
+    "kr": {
+        "name": "Daejeon",
+        "label": "대전 · Daejeon",
+        "flag": "🇰🇷",
+        "lat": 36.3504,
+        "lon": 127.3845,
+        "timezone": "Asia/Seoul",
+        "gif": "ANIME_KR_IMAGE",
+    },
+    "vn": {
+        "name": "Đà Nẵng",
+        "label": "Đà Nẵng · Da Nang",
+        "flag": "🇻🇳",
+        "lat": 16.0544,
+        "lon": 108.2022,
+        "timezone": "Asia/Ho_Chi_Minh",
+        "gif": "ANIME_VN_IMAGE",
+    },
 }
 
-TIMEOUT = aiohttp.ClientTimeout(total=20)
+WEATHER = {
+    0: ("Trời quang", "☀️", 0xFFD98A),
+    1: ("Ít mây", "🌤️", 0xFFD98A),
+    2: ("Mây rải rác", "⛅", 0x9BCBFF),
+    3: ("Nhiều mây", "☁️", 0xA9B7C6),
+    45: ("Sương mù", "🌫️", 0xB9C7D5),
+    48: ("Sương muối", "🌫️", 0xB9C7D5),
+    51: ("Mưa phùn nhẹ", "🌦️", 0x8B9DFF),
+    53: ("Mưa phùn", "🌦️", 0x8B9DFF),
+    55: ("Mưa phùn dày", "🌧️", 0x8B9DFF),
+    56: ("Mưa băng nhẹ", "🌧️", 0x8B9DFF),
+    57: ("Mưa băng mạnh", "🌧️", 0x8B9DFF),
+    61: ("Mưa nhẹ", "🌧️", 0x8B9DFF),
+    63: ("Mưa vừa", "🌧️", 0x8B9DFF),
+    65: ("Mưa lớn", "⛈️", 0x6E7FE8),
+    66: ("Mưa băng nhẹ", "🌧️", 0x8B9DFF),
+    67: ("Mưa băng mạnh", "⛈️", 0x6E7FE8),
+    71: ("Tuyết nhẹ", "🌨️", 0x79C9FF),
+    73: ("Tuyết vừa", "❄️", 0x79C9FF),
+    75: ("Tuyết lớn", "❄️", 0x79C9FF),
+    77: ("Hạt tuyết", "❄️", 0x79C9FF),
+    80: ("Mưa rào nhẹ", "🌦️", 0x8B9DFF),
+    81: ("Mưa rào", "🌧️", 0x8B9DFF),
+    82: ("Mưa rào mạnh", "⛈️", 0x6E7FE8),
+    85: ("Mưa tuyết nhẹ", "🌨️", 0x79C9FF),
+    86: ("Mưa tuyết mạnh", "❄️", 0x79C9FF),
+    95: ("Dông", "⛈️", 0x6E7FE8),
+    96: ("Dông có mưa đá", "⛈️", 0x6E7FE8),
+    99: ("Dông mưa đá mạnh", "⛈️", 0x6E7FE8),
+}
+
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+
+panel_lock = asyncio.Lock()
+music_lock = asyncio.Lock()
+music_timer_task = None
+music_deadline = 0
+music_queue = []
+music_query = AUTO_MUSIC_QUERY
+last_morning_date = None
+view_registered = False
 
 
-# =========================
-# HELPERS
-# =========================
-
-def clean_username(value):
-    value = value.strip()
-
-    if "://" not in value and "tiktok.com" in value.lower():
-        value = "https://" + value
-
-    if value.startswith(("http://", "https://")):
-        parsed = urlparse(value)
-        match = re.search(r"/@([^/?#]+)", parsed.path)
-
-        if not match:
-            return ""
-
-        value = match.group(1)
-
-    value = value.lstrip("@").strip()
-
-    if not re.fullmatch(r"[A-Za-z0-9._]+", value):
-        return ""
-
-    return value
-
-
-def fmt_number(value):
-    if value is None:
-        return "Chưa lấy được"
-
-    try:
-        return f"{int(value):,}"
-    except (ValueError, TypeError):
-        return "Chưa lấy được"
-
-
-def add_requester(embed, ctx):
-    embed.set_footer(
-        text=f"Người kiểm tra: {ctx.author.display_name}",
-        icon_url=ctx.author.display_avatar.url,
+def weather_info(code):
+    return WEATHER.get(
+        int(code or 0),
+        ("Chưa rõ", "🌈", 0x9BE3D3),
     )
 
 
-# =========================
-# PARSE TIKTOK PROFILE
-# =========================
+async def fetch_weather(city_key):
+    city = CITIES[city_key]
 
-def extract_profile(html):
-    script_patterns = [
-        r'<script[^>]*id=["\']__UNIVERSAL_DATA_FOR_REHYDRATION__["\'][^>]*>(.*?)</script>',
-        r'<script[^>]*id=["\']SIGI_STATE["\'][^>]*>(.*?)</script>',
-    ]
+    params = {
+        "latitude": city["lat"],
+        "longitude": city["lon"],
+        "timezone": city["timezone"],
+        "forecast_days": 7,
+        "current": (
+            "temperature_2m,relative_humidity_2m,"
+            "apparent_temperature,precipitation,weather_code,"
+            "wind_speed_10m,wind_gusts_10m"
+        ),
+        "hourly": (
+            "temperature_2m,precipitation_probability,"
+            "precipitation,weather_code,wind_speed_10m"
+        ),
+        "daily": (
+            "weather_code,temperature_2m_max,temperature_2m_min,"
+            "precipitation_probability_max,precipitation_sum,"
+            "wind_speed_10m_max"
+        ),
+    }
 
-    for pattern in script_patterns:
-        match = re.search(pattern, html, re.S | re.I)
+    timeout = aiohttp.ClientTimeout(total=20)
 
-        if not match:
-            continue
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(WEATHER_URL, params=params) as response:
+            response.raise_for_status()
+            data = await response.json()
 
+    return city, data
+
+
+def weather_advice(current, daily):
+    temp = current.get("temperature_2m")
+    feels = current.get("apparent_temperature")
+    rain = (daily.get("precipitation_probability_max") or [0])[0] or 0
+    wind = current.get("wind_speed_10m") or 0
+    gust = current.get("wind_gusts_10m") or 0
+    code = int(current.get("weather_code") or 0)
+
+    messages = []
+
+    if rain >= 60 or code in (61, 63, 65, 80, 81, 82, 95, 96, 99):
+        messages.append("☂️ Khả năng mưa cao — nhớ mang ô.")
+
+    if temp is not None and temp <= 5:
+        messages.append("🧣 Trời rất lạnh — mặc nhiều lớp để giữ ấm.")
+    elif temp is not None and temp <= 12:
+        messages.append("🧥 Nên mang áo khoác.")
+
+    if feels is not None and feels >= 32:
+        messages.append("🧢 Cảm giác nóng — uống nước, nghỉ trong bóng râm.")
+    elif temp is not None and temp >= 30:
+        messages.append("💧 Trời nóng — nhớ uống đủ nước.")
+
+    if wind >= 35 or gust >= 50:
+        messages.append("💨 Gió mạnh — cẩn thận khi đi ngoài trời.")
+
+    if not messages:
+        messages.append("🌿 Thời tiết khá ổn — chúc m một ngày tốt lành!")
+
+    return "\n".join(messages)
+
+
+def make_today_embed(city, data):
+    current = data["current"]
+    daily = data["daily"]
+    status, emoji, color = weather_info(current.get("weather_code"))
+
+    high = (daily.get("temperature_2m_max") or ["—"])[0]
+    low = (daily.get("temperature_2m_min") or ["—"])[0]
+    rain = (daily.get("precipitation_probability_max") or [0])[0]
+    rain = rain if rain is not None else 0
+
+    embed = discord.Embed(
+        title=f"{city['flag']} {city['label']} • {emoji} {status}",
+        description=(
+            f"# {current.get('temperature_2m', '—')}°C\n"
+            f"Cảm giác như **{current.get('apparent_temperature', '—')}°C**\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌡️ **Cao / thấp:** {high}° / {low}°C\n"
+            f"💧 **Độ ẩm:** {current.get('relative_humidity_2m', '—')}%\n"
+            f"☔ **Khả năng mưa:** {rain}%\n"
+            f"🌧️ **Lượng mưa hiện tại:** {current.get('precipitation', '—')} mm\n"
+            f"💨 **Gió:** {current.get('wind_speed_10m', '—')} km/h "
+            f"· giật {current.get('wind_gusts_10m', '—')} km/h\n\n"
+            f"**✦ Lời nhắn hôm nay**\n"
+            f"{weather_advice(current, daily)}"
+        ),
+        color=color,
+    )
+
+    gif_url = os.getenv(city["gif"], "").strip()
+    if gif_url.startswith(("https://", "http://")):
+        embed.set_image(url=gif_url)
+
+    embed.set_footer(
+        text=f"◈ ANIME WEATHER • Open-Meteo • {current.get('time', '—')}"
+    )
+    return embed
+
+
+def make_hourly_embed(city, data):
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    now = data.get("current", {}).get("time", "")
+    start = times.index(now) if now in times else 0
+
+    lines = []
+
+    for i in range(start, min(start + 8, len(times))):
+        status, icon, _ = weather_info(
+            (hourly.get("weather_code") or [0])[i]
+        )
+        temp = (hourly.get("temperature_2m") or ["—"])[i]
+        rain = (hourly.get("precipitation_probability") or [0])[i]
+        wind = (hourly.get("wind_speed_10m") or ["—"])[i]
+
+        lines.append(
+            f"`{times[i][-5:]}` {icon} **{temp}°C** · "
+            f"mưa {rain or 0}% · gió {wind} km/h · {status}"
+        )
+
+    _, _, color = weather_info(data["current"].get("weather_code"))
+
+    embed = discord.Embed(
+        title=f"⏳ {city['flag']} {city['name']} • 8 giờ tới",
+        description="\n".join(lines) or "Chưa có dữ liệu theo giờ.",
+        color=color,
+    )
+    embed.set_footer(text="Dự báo theo giờ • Open-Meteo")
+    return embed
+
+
+def make_week_embed(city, data):
+    daily = data.get("daily", {})
+    lines = []
+
+    for i, date in enumerate((daily.get("time") or [])[:7]):
+        status, icon, _ = weather_info(
+            (daily.get("weather_code") or [0])[i]
+        )
+        high = (daily.get("temperature_2m_max") or ["—"])[i]
+        low = (daily.get("temperature_2m_min") or ["—"])[i]
+        rain = (daily.get("precipitation_probability_max") or [0])[i]
+        amount = (daily.get("precipitation_sum") or ["—"])[i]
+
+        lines.append(
+            f"**{date}** · {icon} **{high}° / {low}°C** · "
+            f"mưa {rain or 0}% · {amount} mm\n└ {status}"
+        )
+
+    _, _, color = weather_info(data["current"].get("weather_code"))
+
+    embed = discord.Embed(
+        title=f"📅 {city['flag']} {city['name']} • Dự báo 7 ngày",
+        description="\n".join(lines) or "Chưa có dữ liệu tuần.",
+        color=color,
+    )
+    embed.set_footer(text="Dự báo có thể thay đổi • Open-Meteo")
+    return embed
+
+
+def make_panel_embed():
+    embed = discord.Embed(
+        title="◈ 𝐀𝐍𝐈𝐌𝐄 𝐖𝐄𝐀𝐓𝐇𝐄𝐑",
+        description=(
+            "```ansi\n"
+            "\u001b[1;36m✦ DAILY FORECAST • ANIME ATMOSPHERE ✦\u001b[0m\n"
+            "```\n"
+            "Bấm nút bên dưới — **không cần gõ lệnh**.\n\n"
+            "🌤️ Hôm nay　·　⏳ Theo giờ　·　📅 7 ngày\n"
+            "🇰🇷 Daejeon　·　🇻🇳 Đà Nẵng　·　🔄 Làm mới\n"
+            "🎵 Test nhạc　·　⏹ Dừng nhạc *(admin)*\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"🕖 Bản tin tự động: **{MORNING_HOUR:02d}:"
+            f"{MORNING_MINUTE:02d} KST**\n"
+            f"🎧 Nhạc tự phát: **{MUSIC_MINUTES} phút** mỗi sáng\n"
+            "♾️ Panel được khôi phục sau khi bot khởi động lại."
+        ),
+        color=0x9BE3D3,
+    )
+    embed.set_footer(text=PANEL_MARKER)
+    return embed
+
+
+async def get_text_channel(channel_id):
+    if not channel_id:
+        return None
+
+    channel = bot.get_channel(channel_id)
+
+    if channel is None:
         try:
-            root = json.loads(match.group(1))
-        except (ValueError, TypeError):
-            continue
+            channel = await bot.fetch_channel(channel_id)
+        except Exception:
+            log.exception("Không lấy được text channel %s", channel_id)
+            return None
 
-        candidates = []
-
-        def walk(obj):
-            if isinstance(obj, dict):
-                info = obj.get("userInfo")
-
-                if isinstance(info, dict):
-                    user = info.get("user")
-                    stats = info.get("stats") or info.get("statsV2") or {}
-
-                    if isinstance(user, dict):
-                        candidates.append((user, stats))
-
-                # Tìm user/stats trong cấu trúc cũ.
-                if (
-                    obj.get("uniqueId")
-                    and any(
-                        k in obj
-                        for k in (
-                            "avatarLarger",
-                            "avatarMedium",
-                            "avatarThumb",
-                        )
-                    )
-                ):
-                    candidates.append((obj, {}))
-
-                for value in obj.values():
-                    walk(value)
-
-            elif isinstance(obj, list):
-                for value in obj:
-                    walk(value)
-
-        walk(root)
-
-        # Dữ liệu cũ: UserModule lưu users và stats riêng.
-        module = root.get("UserModule", {})
-        users = module.get("users", {})
-        all_stats = module.get("stats", {})
-
-        if isinstance(users, dict):
-            for uid, user in users.items():
-                if isinstance(user, dict):
-                    candidates.append(
-                        (user, all_stats.get(uid, {}))
-                    )
-
-        for user, stats in candidates:
-            if not isinstance(user, dict):
-                continue
-
-            if not isinstance(stats, dict):
-                stats = {}
-
-            username = user.get("uniqueId", "")
-
-            avatar = (
-                user.get("avatarLarger")
-                or user.get("avatarMedium")
-                or user.get("avatarThumb")
-                or ""
-            )
-
-            if isinstance(avatar, list):
-                avatar = avatar[0] if avatar else ""
-
-            if not isinstance(avatar, str):
-                avatar = ""
-
-            if not username and not avatar:
-                continue
-
-            return {
-                "username": username,
-                "nickname": user.get("nickname") or username or "TikTok user",
-                "avatar": avatar,
-                "followers": stats.get("followerCount"),
-                "likes": stats.get(
-                    "heartCount",
-                    stats.get("heart", stats.get("likesCount")),
-                ),
-                "verified": user.get("verified", False),
-            }
+    if isinstance(channel, (discord.TextChannel, discord.Thread)):
+        return channel
 
     return None
 
 
-async def fetch_profile(session, username):
-    profile_url = f"https://www.tiktok.com/@{username}"
+async def ensure_panel():
+    channel = await get_text_channel(PANEL_CHANNEL_ID or WEATHER_CHANNEL_ID)
 
-    result = {
-        "username": username,
-        "nickname": username,
-        "avatar": "",
-        "followers": None,
-        "likes": None,
-        "verified": False,
+    if channel is None:
+        log.error("Thiếu PANEL_CHANNEL_ID hoặc WEATHER_CHANNEL_ID hợp lệ.")
+        return
+
+    async with panel_lock:
+        try:
+            async for message in channel.history(limit=100):
+                if (
+                    message.author == bot.user
+                    and message.embeds
+                    and PANEL_MARKER in (message.embeds[0].footer.text or "")
+                ):
+                    await message.edit(
+                        embed=make_panel_embed(),
+                        view=WeatherPanel(),
+                    )
+                    log.info("Panel đã khôi phục: %s", message.id)
+                    return
+
+            message = await channel.send(
+                embed=make_panel_embed(),
+                view=WeatherPanel(),
+            )
+            log.info("Panel đã tạo: %s", message.id)
+
+        except Exception:
+            log.exception(
+                "Không tạo được panel. Kiểm tra quyền View Channel, "
+                "Send Messages, Embed Links, Read Message History."
+            )
+
+
+async def send_morning_weather():
+    channel = await get_text_channel(WEATHER_CHANNEL_ID)
+
+    if channel is None:
+        log.error("WEATHER_CHANNEL_ID không hợp lệ.")
+        return
+
+    for key in ("kr", "vn"):
+        try:
+            city, data = await fetch_weather(key)
+            await channel.send(embed=make_today_embed(city, data))
+            log.info("Đã gửi thời tiết sáng: %s", city["name"])
+        except Exception:
+            log.exception("Gửi bản tin thời tiết thất bại: %s", key)
+
+
+# ==================== YOUTUBE MUSIC ====================
+
+YTDLP_OPTIONS = {
+    "format": "bestaudio/best",
+    "noplaylist": True,
+    "quiet": True,
+    "no_warnings": True,
+    "socket_timeout": 20,
+    "retries": 2,
+    "extractor_retries": 2,
+    "default_search": "ytsearch5",
+}
+
+
+def search_youtube(query):
+    with yt_dlp.YoutubeDL(YTDLP_OPTIONS) as ydl:
+        info = ydl.extract_info(f"ytsearch5:{query}", download=False)
+
+    if info and info.get("entries"):
+        return [
+            item for item in info["entries"]
+            if item and item.get("webpage_url")
+        ]
+
+    return []
+
+
+def resolve_youtube(url):
+    options = {
+        **YTDLP_OPTIONS,
+        "default_search": "auto",
+        "noplaylist": True,
     }
 
-    page_ok = False
+    with yt_dlp.YoutubeDL(options) as ydl:
+        info = ydl.extract_info(url, download=False)
 
-    # Thử lấy trang hồ sơ.
-    try:
-        async with session.get(
-            profile_url,
-            allow_redirects=True,
-        ) as response:
-            if response.status == 200:
-                page_ok = True
-                html = await response.text(errors="ignore")
-                data = extract_profile(html)
+    if info and info.get("entries"):
+        info = next((item for item in info["entries"] if item), None)
 
-                if data:
-                    result.update(data)
-    except (aiohttp.ClientError, asyncio.TimeoutError):
-        pass
+    if not info or not info.get("url"):
+        raise RuntimeError("YouTube không trả về audio stream.")
 
-    # Phương án dự phòng lấy tên và ảnh qua oEmbed.
-    # oEmbed không cung cấp số follower/tổng tim.
-    if not result["avatar"] or result["nickname"] == username:
-        try:
-            oembed_url = "https://www.tiktok.com/oembed"
-            params = {"url": profile_url}
-
-            async with session.get(
-                oembed_url,
-                params=params,
-                allow_redirects=True,
-            ) as response:
-                if response.status == 200:
-                    data = await response.json(content_type=None)
-
-                    result["nickname"] = (
-                        data.get("author_name")
-                        or result["nickname"]
-                    )
-                    result["avatar"] = (
-                        data.get("thumbnail_url")
-                        or result["avatar"]
-                    )
-                    page_ok = True
-        except (
-            aiohttp.ClientError,
-            asyncio.TimeoutError,
-            ValueError,
-        ):
-            pass
-
-    # Có dữ liệu xác nhận hồ sơ.
-    if result["avatar"] or result["nickname"] != username:
-        return "alive", result
-
-    # Không kết luận DIE chỉ vì TikTok chặn hoặc không trả dữ liệu.
-    if page_ok:
-        return "unknown", result
-
-    return "unknown", None
+    return info
 
 
-# =========================
-# CHECK LIVE
-# =========================
+async def get_voice():
+    if not MUSIC_VOICE_CHANNEL_ID:
+        raise RuntimeError("Chưa nhập MUSIC_VOICE_CHANNEL_ID.")
 
-async def resolve_live_link(session, link):
-    if not link.startswith(("https://", "http://")):
-        link = "https://" + link
-
-    parsed = urlparse(link)
-    host = (parsed.hostname or "").lower()
-
-    if not (
-        host == "tiktok.com"
-        or host.endswith(".tiktok.com")
-    ):
-        return None, None
-
-    final_url = link
-
-    try:
-        async with session.get(
-            link,
-            allow_redirects=True,
-        ) as response:
-            final_url = str(response.url)
-    except (aiohttp.ClientError, asyncio.TimeoutError):
-        pass
-
-    match = re.search(
-        r"tiktok\.com/@([^/?#]+)",
-        final_url,
-        re.I,
+    channel = (
+        bot.get_channel(MUSIC_VOICE_CHANNEL_ID)
+        or await bot.fetch_channel(MUSIC_VOICE_CHANNEL_ID)
     )
 
-    if not match:
-        match = re.search(
-            r"tiktok\.com/@([^/?#]+)",
-            link,
-            re.I,
+    if not isinstance(channel, (discord.VoiceChannel, discord.StageChannel)):
+        raise RuntimeError("MUSIC_VOICE_CHANNEL_ID không phải voice channel.")
+
+    voice = discord.utils.get(bot.voice_clients, guild=channel.guild)
+
+    if voice and voice.is_connected():
+        if voice.channel != channel:
+            await voice.move_to(channel)
+    else:
+        voice = await channel.connect()
+
+    return voice
+
+
+async def play_next():
+    global music_queue
+
+    async with music_lock:
+        if time.time() >= music_deadline:
+            return
+
+        voice = next(
+            (item for item in bot.voice_clients if item.is_connected()),
+            None,
         )
 
-    if not match:
-        return None, final_url
+        if voice is None:
+            log.warning("Không có voice connection để phát nhạc.")
+            return
 
-    return clean_username(match.group(1)), final_url
+        if not music_queue:
+            try:
+                music_queue = await asyncio.to_thread(
+                    search_youtube, music_query
+                )
+            except Exception:
+                log.exception("Tìm nhạc trên YouTube thất bại.")
+                return
+
+        if not music_queue:
+            log.warning("Không tìm thấy bài nhạc.")
+            return
+
+        item = music_queue.pop(0)
+
+        try:
+            audio = await asyncio.to_thread(
+                resolve_youtube, item["webpage_url"]
+            )
+
+            source = discord.FFmpegPCMAudio(
+                audio["url"],
+                before_options=(
+                    "-reconnect 1 -reconnect_streamed 1 "
+                    "-reconnect_delay_max 5"
+                ),
+                options="-vn",
+            )
+
+            log.info(
+                "Đang phát nhạc: %s",
+                audio.get("title", item.get("title", "YouTube")),
+            )
+
+            def after_play(error):
+                if error:
+                    log.warning("Lỗi phát audio: %s", error)
+
+                if time.time() < music_deadline:
+                    asyncio.run_coroutine_threadsafe(
+                        play_next(), bot.loop
+                    )
+
+            voice.play(source, after=after_play)
+
+        except Exception:
+            log.exception("Không phát được bài: %s", item.get("title"))
+
+            if time.time() < music_deadline:
+                asyncio.get_running_loop().call_later(
+                    2,
+                    lambda: asyncio.create_task(play_next()),
+                )
 
 
-async def check_tiktok_live(username):
-    client = TikTokLiveClient(unique_id=username)
+async def start_music():
+    global music_timer_task, music_deadline, music_query, music_queue
+
+    voice = await get_voice()
+    voice.stop()
+
+    music_query = AUTO_MUSIC_QUERY
+    music_queue = []
+    music_deadline = time.time() + MUSIC_MINUTES * 60
 
     try:
-        result = await asyncio.wait_for(
-            client.is_live(),
-            timeout=20,
+        music_queue = await asyncio.to_thread(
+            search_youtube, music_query
         )
+    except Exception:
+        music_deadline = 0
+        raise
 
-        if result is True:
-            return True
+    if not music_queue:
+        music_deadline = 0
+        raise RuntimeError("YouTube không tìm thấy bài nhạc.")
 
-        if result is False:
-            return False
+    await play_next()
 
-        return None
+    if music_timer_task and not music_timer_task.done():
+        music_timer_task.cancel()
 
-    except Exception as exc:
-        # In lỗi để xem trong Railway Deploy Logs nếu cần.
-        print(
-            f"LIVE CHECK ERROR: {type(exc).__name__}: {exc}",
-            flush=True,
-        )
-        return None
+    music_timer_task = asyncio.create_task(stop_music_after_limit())
+    log.info("Nhạc bắt đầu; giới hạn %s phút.", MUSIC_MINUTES)
 
-    finally:
+
+async def stop_music_after_limit():
+    try:
+        await asyncio.sleep(MUSIC_MINUTES * 60)
+        await stop_music()
+        log.info("Đã kết thúc phiên nhạc.")
+    except asyncio.CancelledError:
+        pass
+
+
+async def stop_music():
+    global music_deadline, music_queue, music_timer_task
+
+    music_deadline = 0
+    music_queue = []
+
+    current_task = asyncio.current_task()
+
+    if (
+        music_timer_task
+        and music_timer_task is not current_task
+        and not music_timer_task.done()
+    ):
+        music_timer_task.cancel()
+
+    for voice in list(bot.voice_clients):
         try:
-            await client.close()
+            if voice.is_connected():
+                voice.stop()
+                await voice.disconnect(force=True)
         except Exception:
-            pass
+            log.exception("Dừng nhạc thất bại.")
 
 
-# =========================
-# BOT READY
-# =========================
+async def run_morning_tasks():
+    await send_morning_weather()
+
+    try:
+        await start_music()
+    except Exception:
+        log.exception("Không bật được nhạc tự động buổi sáng.")
+
+
+# ==================== PERSISTENT BUTTON PANEL ====================
+
+async def user_is_admin(interaction):
+    if ADMIN_USER_ID and interaction.user.id == ADMIN_USER_ID:
+        return True
+
+    return (
+        isinstance(interaction.user, discord.Member)
+        and interaction.user.guild_permissions.administrator
+    )
+
+
+class WeatherPanel(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    async def show_weather(self, interaction, city_key, mode):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            city, data = await fetch_weather(city_key)
+
+            if mode == "today":
+                embed = make_today_embed(city, data)
+            elif mode == "hourly":
+                embed = make_hourly_embed(city, data)
+            else:
+                embed = make_week_embed(city, data)
+
+            await interaction.followup.send(
+                embed=embed,
+                ephemeral=True,
+            )
+
+        except Exception:
+            log.exception("Nút thời tiết gặp lỗi.")
+            await interaction.followup.send(
+                "⚠️ Chưa lấy được dữ liệu thời tiết. Thử lại sau nhé.",
+                ephemeral=True,
+            )
+
+    @discord.ui.button(
+        label="Hôm nay",
+        emoji="🌤️",
+        style=discord.ButtonStyle.primary,
+        custom_id="animeweather:today",
+        row=0,
+    )
+    async def today(self, interaction, button):
+        await self.show_weather(interaction, "kr", "today")
+
+    @discord.ui.button(
+        label="Theo giờ",
+        emoji="⏳",
+        style=discord.ButtonStyle.primary,
+        custom_id="animeweather:hourly",
+        row=0,
+    )
+    async def hourly(self, interaction, button):
+        await self.show_weather(interaction, "kr", "hourly")
+
+    @discord.ui.button(
+        label="7 ngày",
+        emoji="📅",
+        style=discord.ButtonStyle.primary,
+        custom_id="animeweather:week",
+        row=0,
+    )
+    async def week(self, interaction, button):
+        await self.show_weather(interaction, "kr", "week")
+
+    @discord.ui.button(
+        label="Daejeon",
+        emoji="🇰🇷",
+        style=discord.ButtonStyle.secondary,
+        custom_id="animeweather:kr",
+        row=1,
+    )
+    async def korea(self, interaction, button):
+        await self.show_weather(interaction, "kr", "today")
+
+    @discord.ui.button(
+        label="Đà Nẵng",
+        emoji="🇻🇳",
+        style=discord.ButtonStyle.secondary,
+        custom_id="animeweather:vn",
+        row=1,
+    )
+    async def vietnam(self, interaction, button):
+        await self.show_weather(interaction, "vn", "today")
+
+    @discord.ui.button(
+        label="Làm mới panel",
+        emoji="🔄",
+        style=discord.ButtonStyle.secondary,
+        custom_id="animeweather:refresh",
+        row=1,
+    )
+    async def refresh(self, interaction, button):
+        if not await user_is_admin(interaction):
+            await interaction.response.send_message(
+                "Chỉ admin mới dùng được nút này.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await ensure_panel()
+        await interaction.followup.send(
+            "✅ Đã kiểm tra/cập nhật bảng nút.",
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="Test nhạc",
+        emoji="🎵",
+        style=discord.ButtonStyle.success,
+        custom_id="animeweather:testmusic",
+        row=2,
+    )
+    async def test_music(self, interaction, button):
+        if not await user_is_admin(interaction):
+            await interaction.response.send_message(
+                "Chỉ admin mới dùng được nút này.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        try:
+            await start_music()
+            await interaction.followup.send(
+                "🎵 Đã yêu cầu bật nhạc trong voice channel.",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            log.exception("Test nhạc thất bại.")
+            await interaction.followup.send(
+                f"⚠️ Không bật được nhạc: {str(exc)[:250]}",
+                ephemeral=True,
+            )
+
+    @discord.ui.button(
+        label="Dừng nhạc",
+        emoji="⏹️",
+        style=discord.ButtonStyle.danger,
+        custom_id="animeweather:stopmusic",
+        row=2,
+    )
+    async def stop_button(self, interaction, button):
+        if not await user_is_admin(interaction):
+            await interaction.response.send_message(
+                "Chỉ admin mới dùng được nút này.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await stop_music()
+        await interaction.followup.send(
+            "⏹️ Đã dừng nhạc và rời voice channel.",
+            ephemeral=True,
+        )
+
+
+# ==================== DAILY SCHEDULER ====================
+
+async def check_morning_schedule():
+    global last_morning_date
+
+    now = discord.utils.utcnow().astimezone(KST)
+
+    if now.hour == MORNING_HOUR and now.minute == MORNING_MINUTE:
+        date_key = now.date().isoformat()
+
+        if last_morning_date != date_key:
+            last_morning_date = date_key
+            log.info("Chạy tác vụ sáng lúc %s KST", now.isoformat())
+            await run_morning_tasks()
+
+
+@tasks.loop(seconds=20)
+async def morning_scheduler():
+    await check_morning_schedule()
+
+
+@morning_scheduler.before_loop
+async def before_morning_scheduler():
+    await bot.wait_until_ready()
+
 
 @bot.event
 async def on_ready():
-    print(f"Bot online: {bot.user}", flush=True)
+    global view_registered
 
-    try:
-        await bot.sync_commands()
-        print("Slash commands synced.", flush=True)
-    except Exception as exc:
-        print(f"SYNC ERROR: {exc}", flush=True)
+    log.info("Bot online: %s", bot.user)
 
+    if not view_registered:
+        bot.add_view(WeatherPanel())
+        view_registered = True
 
-# =========================
-# /checkacc
-# =========================
+    await ensure_panel()
 
-@bot.slash_command(
-    name="checkacc",
-    description="Kiểm tra hồ sơ TikTok",
-)
-async def checkacc(
-    ctx: discord.ApplicationContext,
-    username: discord.Option(
-        str,
-        description="Username hoặc link hồ sơ TikTok",
-    ),
-):
-    await ctx.defer()
-
-    name = clean_username(username)
-
-    if not name:
-        await ctx.followup.send(
-            "❌ Username không hợp lệ. Hãy nhập @username hoặc link hồ sơ.",
-            ephemeral=True,
-        )
-        return
-
-    async with aiohttp.ClientSession(
-        headers=HEADERS,
-        timeout=TIMEOUT,
-    ) as session:
-        status, data = await fetch_profile(session, name)
-
-    profile_url = f"https://www.tiktok.com/@{name}"
-
-    if status == "alive":
-        embed = discord.Embed(
-            title="🟢 TÀI KHOẢN TÌM THẤY",
-            description=f"**@{name}**",
-            url=profile_url,
-            color=discord.Color.green(),
-        )
-
-        embed.add_field(
-            name="👤 Tên",
-            value=data["nickname"],
-            inline=False,
-        )
-        embed.add_field(
-            name="👥 Followers",
-            value=fmt_number(data["followers"]),
-            inline=True,
-        )
-        embed.add_field(
-            name="❤️ Tổng tim",
-            value=fmt_number(data["likes"]),
-            inline=True,
-        )
-        embed.add_field(
-            name="☑️ Xác minh",
-            value="Có" if data["verified"] else "Không rõ / không",
-            inline=True,
-        )
-
-        if data["avatar"]:
-            embed.set_thumbnail(url=data["avatar"])
-
-    else:
-        embed = discord.Embed(
-            title="⚠️ KHÔNG XÁC MINH ĐƯỢC",
-            description=(
-                f"Không lấy được dữ liệu đáng tin cậy của **@{name}**.\n"
-                "Điều này không có nghĩa tài khoản đã DIE."
-            ),
-            url=profile_url,
-            color=discord.Color.orange(),
-        )
-
-        if data and data.get("avatar"):
-            embed.set_thumbnail(url=data["avatar"])
-
-    embed.add_field(
-        name="🔗 Hồ sơ",
-        value=f"[Mở TikTok]({profile_url})",
-        inline=False,
-    )
-
-    add_requester(embed, ctx)
-    await ctx.followup.send(embed=embed)
+    if not morning_scheduler.is_running():
+        morning_scheduler.start()
 
 
-# =========================
-# /checklive
-# =========================
+if not TOKEN:
+    raise RuntimeError("Thiếu DISCORD_TOKEN trong Railway Variables.")
 
-@bot.slash_command(
-    name="checklive",
-    description="Kiểm tra trạng thái livestream TikTok",
-)
-async def checklive(
-    ctx: discord.ApplicationContext,
-    link_live: discord.Option(
-        str,
-        description="Dán link livestream TikTok",
-    ),
-):
-    await ctx.defer()
-
-    async with aiohttp.ClientSession(
-        headers=HEADERS,
-        timeout=TIMEOUT,
-    ) as session:
-        username, final_url = await resolve_live_link(
-            session,
-            link_live.strip(),
-        )
-
-        if not username:
-            embed = discord.Embed(
-                title="⚠️ KHÔNG ĐỌC ĐƯỢC LINK",
-                description=(
-                    "Không tìm thấy username trong link. "
-                    "Hãy dán link TikTok có dạng "
-                    "`https://www.tiktok.com/@username/live`."
-                ),
-                color=discord.Color.orange(),
-            )
-            add_requester(embed, ctx)
-            await ctx.followup.send(embed=embed)
-            return
-
-        profile_status, data = await fetch_profile(
-            session,
-            username,
-        )
-
-    live_status = await check_tiktok_live(username)
-
-    if live_status is True:
-        title = "🟢 ĐANG LIVE"
-        description = f"Phát hiện **@{username}** đang live."
-        color = discord.Color.green()
-
-    elif live_status is False:
-        title = "⚪ KHÔNG PHÁT HIỆN LIVE"
-        description = (
-            f"API không phát hiện phiên live của **@{username}**. "
-            "Nếu người đó đang phát thật, kết quả vẫn có thể sai "
-            "do TikTok chặn hoặc lỗi dữ liệu."
-        )
-        color = discord.Color.light_grey()
-
-    else:
-        title = "⚠️ KHÔNG XÁC MINH ĐƯỢC LIVE"
-        description = (
-            f"Không xác định được trạng thái live của **@{username}**. "
-            "Không kết luận người đó đã tắt live."
-        )
-        color = discord.Color.orange()
-
-    embed = discord.Embed(
-        title=title,
-        description=description,
-        url=final_url or f"https://www.tiktok.com/@{username}/live",
-        color=color,
-    )
-
-    embed.add_field(
-        name="👤 Tài khoản",
-        value=f"@{username}",
-        inline=False,
-    )
-
-    if data and data.get("avatar"):
-        embed.set_thumbnail(url=data["avatar"])
-
-    embed.add_field(
-        name="🔗 Link live",
-        value=(
-            f"[Mở TikTok]({final_url})"
-            if final_url
-            else f"[Mở hồ sơ](https://www.tiktok.com/@{username})"
-        ),
-        inline=False,
-    )
-
-    add_requester(embed, ctx)
-    await ctx.followup.send(embed=embed)
-
-
-# =========================
-# START BOT
-# =========================
-
-token = os.getenv("DISCORD_TOKEN")
-
-if not token:
-    raise RuntimeError(
-        "Railway Variables đang thiếu DISCORD_TOKEN."
-    )
-
-bot.run(token)
+bot.run(TOKEN)
